@@ -1,0 +1,6 @@
+# build output: the signed catalog is published as release assets, not committed
+/dist/
+
+# the signing key never enters the repository
+*.pem
+.env

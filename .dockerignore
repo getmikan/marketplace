@@ -1,0 +1,6 @@
+.git
+.github
+dist
+*.pem
+**/*_test.go
+**/README.md
