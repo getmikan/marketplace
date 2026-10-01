@@ -2,7 +2,7 @@
   "id": "cryptobot",
   "name": {"ru": "CryptoBot", "en": "CryptoBot"},
   "description": {"ru": "Криптовалюта через @CryptoBot в Telegram", "en": "Cryptocurrency via @CryptoBot in Telegram"},
-  "version": "1.0.0",
+  "version": "1.0.1",
   "protocol": 1,
   "image": "ghcr.io/getmikan/adapter-cryptobot",
   "min_panel": "0.4.3",

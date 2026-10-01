@@ -14,6 +14,7 @@ contract between them is [PROTOCOL.md](PROTOCOL.md).
 |---|---|---|---|
 | [`yookassa`](adapters/yookassa) | ЮKassa: bank cards and SBP | RUB | webhook, refund |
 | [`cryptobot`](adapters/cryptobot) | @CryptoBot (Crypto Pay): cryptocurrency, priced in fiat | RUB, USD, EUR | webhook |
+| [`platega`](adapters/platega) | Platega: SBP, cards, Sberpay, crypto | RUB | webhook |
 
 Each needs panel 0.4.3 or later.
 

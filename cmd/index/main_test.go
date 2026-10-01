@@ -66,9 +66,9 @@ func version(t *testing.T) string {
 	return m.Version
 }
 
-// The real adapters/ directory: both adapters, one version.
+// The real adapters/ directory: all adapters, one version.
 func TestListRealAdapters(t *testing.T) {
-	want := `["cryptobot","yookassa"]` + "\n"
+	want := `["cryptobot","platega","yookassa"]` + "\n"
 	for _, args := range [][]string{{"list", "-adapters", "../../adapters"}, {"list", "-adapters", "../../adapters", "-version", version(t)}} {
 		if got := runOK(t, args...); got != want {
 			t.Fatalf("index %v: %q", args, got)
@@ -81,7 +81,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	pub := throwawayKey(t)
 	out := t.TempDir()
 	v := version(t)
-	runOK(t, "build", "-adapters", "../../adapters", "-version", v, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-out", out)
+	runOK(t, "build", "-adapters", "../../adapters", "-version", v, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-out", out)
 	file := filepath.Join(out, "index.json")
 	got := runOK(t, "verify", "-key", pub, file)
 	if !strings.Contains(got, "ok: cryptobot "+v+" ghcr.io/getmikan/adapter-cryptobot@"+digestB) ||
@@ -98,7 +98,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 		t.Fatal("the signature does not verify over the file's bytes")
 	}
 	idx, err := catalog.Verify(data, string(sig), key)
-	if err != nil || idx.Version != 1 || len(idx.Adapters) != 2 || idx.Adapters[1].Digest != digestA || idx.Adapters[1].MinPanel != "0.4.3" {
+	if err != nil || idx.Version != 1 || len(idx.Adapters) != 3 || idx.Adapters[2].Digest != digestA || idx.Adapters[2].MinPanel != "0.4.3" {
 		t.Fatalf("index: %v %+v", err, idx)
 	}
 
@@ -117,13 +117,13 @@ func TestBuildRefuses(t *testing.T) {
 	throwawayKey(t)
 	out := t.TempDir()
 	base := []string{"build", "-adapters", "../../adapters", "-version", version(t), "-out", out}
-	runFails(t, "-version is required", "build", "-adapters", "../../adapters", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB)
+	runFails(t, "-version is required", "build", "-adapters", "../../adapters", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB)
 	runFails(t, "no digest for adapter", append(base, "-digest", "yookassa="+digestA)...)
-	runFails(t, "does not exist", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "stripe="+digestA)...)
+	runFails(t, "does not exist", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "stripe="+digestA)...)
 	runFails(t, "two digests", append(base, "-digest", "yookassa="+digestA, "-digest", "yookassa="+digestB)...)
-	runFails(t, "digest", append(base, "-digest", "yookassa=sha256:abc", "-digest", "cryptobot="+digestB)...)
+	runFails(t, "digest", append(base, "-digest", "yookassa=sha256:abc", "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB)...)
 	t.Setenv("MARKETPLACE_SIGNING_KEY", "")
-	runFails(t, "MARKETPLACE_SIGNING_KEY", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB)...)
+	runFails(t, "MARKETPLACE_SIGNING_KEY", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB)...)
 	if _, err := os.Stat(filepath.Join(out, "index.json")); err == nil {
 		t.Fatal("a refused build wrote index.json")
 	}

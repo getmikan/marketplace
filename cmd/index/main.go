@@ -4,7 +4,7 @@
 //	    checks every adapters/*/adapter.json and that all are at this version (or at
 //	    one version); prints their ids as a JSON array (the build matrix)
 //	MARKETPLACE_SIGNING_KEY="$(cat key.pem)" index build -version 1.0.0 \
-//	    -digest yookassa=sha256:… -digest cryptobot=sha256:… -out dist
+//	    -digest yookassa=sha256:… -digest cryptobot=sha256:… -digest platega=sha256:… -out dist
 //	    writes dist/index.json and dist/index.json.sig
 //	index verify dist/index.json
 //	    checks dist/index.json.sig with the release public key (or -key)

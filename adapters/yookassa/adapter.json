@@ -2,7 +2,7 @@
   "id": "yookassa",
   "name": {"ru": "ЮKassa", "en": "YooKassa"},
   "description": {"ru": "Банковские карты и СБП", "en": "Bank cards and SBP"},
-  "version": "1.0.0",
+  "version": "1.0.1",
   "protocol": 1,
   "image": "ghcr.io/getmikan/adapter-yookassa",
   "min_panel": "0.4.3",
