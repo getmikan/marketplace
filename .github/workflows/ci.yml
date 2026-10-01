@@ -1,0 +1,58 @@
+name: ci
+
+# Every push and pull request: formatting, vet, tests, and each adapter's image for
+# amd64 and arm64. Nothing here publishes; releases come from tags (release.yml).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    outputs:
+      adapters: ${{ steps.list.outputs.adapters }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "not gofmt-ed:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      # Checks every adapter.json and lists the adapters for the image job.
+      - id: list
+        run: echo "adapters=$(go run ./cmd/index list)" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: go
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: ${{ fromJSON(needs.go.outputs.adapters) }}
+    steps:
+      - uses: actions/checkout@v5
+      # arm64 too: a wrong-architecture binary fails the build (see the Dockerfiles).
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: adapters/${{ matrix.adapter }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=${{ matrix.adapter }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.adapter }}

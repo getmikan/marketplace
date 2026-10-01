@@ -1,0 +1,120 @@
+name: release
+
+# A tag vX.Y.Z publishes the catalog. One tag versions every adapter: each
+# adapters/*/adapter.json must say "version": "X.Y.Z".
+#   - each adapter's image to GitHub Packages, ghcr.io/getmikan/adapter-<id>:X.Y.Z,
+#     amd64 and arm64;
+#   - index.json with their digests, signed with the mikan release key
+#     (MARKETPLACE_SIGNING_KEY), and index.json.sig, as assets of the GitHub release:
+#     the panel reads releases/latest/download/index.json.
+# A pre-release tag (vX.Y.Z-rc.N) is published as a pre-release, which "latest" skips.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      adapters: ${{ steps.plan.outputs.adapters }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      # Fails before anything is pushed if an adapter is not at the tag's version.
+      - id: plan
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "adapters=$(go run ./cmd/index list -version "$version")" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        adapter: ${{ fromJSON(needs.test.outputs.adapters) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/getmikan/adapter-${{ matrix.adapter }}
+          tags: type=raw,value=${{ needs.test.outputs.version }}
+      - id: build
+        uses: docker/build-push-action@v6
+        env:
+          # the build record would be one more artifact of the run; publish wants only the digests
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: adapters/${{ matrix.adapter }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.adapter }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.adapter }}
+      - name: digest
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          printf '%s' "$DIGEST" > "digests/$ADAPTER"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.adapter }}
+          path: digests/${{ matrix.adapter }}
+          retention-days: 1
+
+  publish:
+    needs: [test, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+      - name: catalog
+        env:
+          MARKETPLACE_SIGNING_KEY: ${{ secrets.MARKETPLACE_SIGNING_KEY }}
+          VERSION: ${{ needs.test.outputs.version }}
+        run: |
+          args=()
+          for f in digests/*; do args+=(-digest "$(basename "$f")=$(cat "$f")"); done
+          go run ./cmd/index build -version "$VERSION" "${args[@]}" -out dist
+          # The panel and the host trust only the release key: check with its public half.
+          go run ./cmd/index verify dist/index.json
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" $pre --verify-tag --title "Catalog ${GITHUB_REF_NAME#v}" --generate-notes \
+            dist/index.json dist/index.json.sig
