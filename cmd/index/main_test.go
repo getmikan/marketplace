@@ -6,11 +6,13 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getmikan/marketplace/internal/catalog"
 )
@@ -66,22 +68,19 @@ func version(t *testing.T) string {
 	return m.Version
 }
 
-// The real adapters/ directory: all adapters, one version.
+// The real adapters/ directory can carry independent versions.
 func TestListRealAdapters(t *testing.T) {
 	want := `["cryptobot","platega","rollypay","yookassa"]` + "\n"
-	for _, args := range [][]string{{"list", "-adapters", "../../adapters"}, {"list", "-adapters", "../../adapters", "-version", version(t)}} {
-		if got := runOK(t, args...); got != want {
-			t.Fatalf("index %v: %q", args, got)
-		}
+	if got := runOK(t, "list", "-adapters", "../../adapters"); got != want {
+		t.Fatalf("index list: %q", got)
 	}
-	runFails(t, "but the release is 0.0.0-never", "list", "-adapters", "../../adapters", "-version", "0.0.0-never")
 }
 
 func TestSignVerifyRoundTrip(t *testing.T) {
 	pub := throwawayKey(t)
 	out := t.TempDir()
 	v := version(t)
-	runOK(t, "build", "-adapters", "../../adapters", "-version", v, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-out", out)
+	runOK(t, "build", "-adapters", "../../adapters", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-out", out)
 	file := filepath.Join(out, "index.json")
 	got := runOK(t, "verify", "-key", pub, file)
 	if !strings.Contains(got, "ok: cryptobot "+v+" ghcr.io/getmikan/adapter-cryptobot@"+digestB) ||
@@ -116,8 +115,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 func TestBuildRefuses(t *testing.T) {
 	throwawayKey(t)
 	out := t.TempDir()
-	base := []string{"build", "-adapters", "../../adapters", "-version", version(t), "-out", out}
-	runFails(t, "-version is required", "build", "-adapters", "../../adapters", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB)
+	base := []string{"build", "-adapters", "../../adapters", "-out", out}
 	runFails(t, "no digest for adapter", append(base, "-digest", "yookassa="+digestA)...)
 	runFails(t, "does not exist", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "stripe="+digestA)...)
 	runFails(t, "two digests", append(base, "-digest", "yookassa="+digestA, "-digest", "yookassa="+digestB)...)
@@ -143,7 +141,7 @@ func TestManifestChecks(t *testing.T) {
 	ok := `{"id":"demo","name":{"ru":"Демо","en":"Demo"},"description":{"ru":"д","en":"d"},"version":"1.0.0","protocol":1,` +
 		`"image":"ghcr.io/getmikan/adapter-demo","min_panel":"0.4.3","homepage":"https://example.com"}`
 	write("demo", ok)
-	runOK(t, "list", "-adapters", dir, "-version", "1.0.0")
+	runOK(t, "list", "-adapters", dir)
 
 	for name, body := range map[string]string{
 		"unknown field": strings.Replace(ok, `"protocol":1`, `"protocol":1,"extra":true`, 1),
@@ -153,16 +151,132 @@ func TestManifestChecks(t *testing.T) {
 		"http homepage": strings.Replace(ok, "https://example.com", "http://example.com", 1),
 	} {
 		write("demo", body)
-		if err := run([]string{"list", "-adapters", dir, "-version", "1.0.0"}, &bytes.Buffer{}); err == nil {
+		if err := run([]string{"list", "-adapters", dir}, &bytes.Buffer{}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	write("demo", ok)
 	write("other", ok) // id "demo" in the directory "other"
-	runFails(t, "but the directory is", "list", "-adapters", dir, "-version", "1.0.0")
+	runFails(t, "but the directory is", "list", "-adapters", dir)
 
-	// Two adapters at different versions: one tag cannot version both.
+	// Two adapters at different versions are valid.
 	write("other", strings.ReplaceAll(strings.Replace(ok, `"version":"1.0.0"`, `"version":"1.0.1"`, 1), "demo", "other"))
-	runFails(t, "version 1.0.1, but the release is 1.0.0", "list", "-adapters", dir)
-	runFails(t, "version 1.0.1, but the release is 1.0.0", "list", "-adapters", dir, "-version", "1.0.0")
+	if got := runOK(t, "list", "-adapters", dir); got != "[\"demo\",\"other\"]\n" {
+		t.Fatalf("list: %q", got)
+	}
+}
+
+func TestReleasePlanOnlyChangedAdapter(t *testing.T) {
+	ms, err := manifests("../../adapters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digests := map[string]string{}
+	for _, m := range ms {
+		digests[m.ID] = digestA
+	}
+	prev, err := catalog.Build(ms, digests, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range ms {
+		if ms[i].ID == "rollypay" {
+			ms[i].Version = "9.0.0"
+		}
+	}
+	p, err := makeReleasePlan(ms, prev, []string{"adapters/rollypay/rollypay.go", "README.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Build) != 1 || p.Build[0].ID != "rollypay" || p.Build[0].Version != "9.0.0" || len(p.Reuse) != 3 {
+		t.Fatalf("plan: %+v", p)
+	}
+	for id, digest := range p.Reuse {
+		if id == "rollypay" || digest != digestA {
+			t.Fatalf("reuse: %+v", p.Reuse)
+		}
+	}
+	for i := range ms {
+		if ms[i].ID == "rollypay" {
+			ms[i].Version = prev.Adapters[2].Version
+		}
+	}
+	if _, err := makeReleasePlan(ms, prev, []string{"adapters/rollypay/rollypay.go"}); err == nil || !strings.Contains(err.Error(), "bump its version") {
+		t.Fatalf("unchanged version: %v", err)
+	}
+	if _, err := makeReleasePlan(ms, prev, []string{"internal/adapter/server.go"}); err == nil || !strings.Contains(err.Error(), "bump its version") {
+		t.Fatalf("shared code: %v", err)
+	}
+	if p, err := makeReleasePlan(ms, prev, []string{"adapters/rollypay/README.md", "adapters/rollypay/rollypay_test.go"}); err != nil || len(p.Build) != 0 {
+		t.Fatalf("documentation and tests: %+v, %v", p, err)
+	}
+	for i := range ms {
+		if ms[i].ID == "rollypay" {
+			ms[i].Version = "1.0.2"
+		}
+	}
+	if _, err := makeReleasePlan(ms, prev, []string{"adapters/rollypay/rollypay.go"}); err == nil || !strings.Contains(err.Error(), "must be newer") {
+		t.Fatalf("downgrade: %v", err)
+	}
+}
+
+func TestCompareVersion(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.10", "1.0.9", 1},
+		{"2.0.0", "10.0.0", -1},
+		{"1.0.0-rc.10", "1.0.0-rc.9", 1},
+		{"1.0.0-rc.1", "1.0.0", -1},
+		{"1.0.0", "1.0.0-rc.1", 1},
+		{"1.0.0-1", "1.0.0-alpha", -1},
+		{"1.0.0", "1.0.0", 0},
+	} {
+		if got := compareVersion(tc.a, tc.b); got != tc.want {
+			t.Errorf("compareVersion(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestBuildWithReusedDigests(t *testing.T) {
+	throwawayKey(t)
+	ms, err := manifests("../../adapters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := releasePlan{Build: []buildAdapter{}, Reuse: map[string]string{}}
+	for _, m := range ms {
+		if m.ID == "rollypay" {
+			p.Build = append(p.Build, buildAdapter{m.ID, m.Version})
+		} else {
+			p.Reuse[m.ID] = digestA
+		}
+	}
+	file := filepath.Join(t.TempDir(), "plan.json")
+	data, _ := json.Marshal(p)
+	if err := os.WriteFile(file, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	runOK(t, "build", "-adapters", "../../adapters", "-plan", file, "-digest", "rollypay="+digestB, "-out", out)
+	indexData, err := os.ReadFile(filepath.Join(out, "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx catalog.Index
+	if err := json.Unmarshal(indexData, &idx); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range idx.Adapters {
+		want := digestA
+		if e.ID == "rollypay" {
+			want = digestB
+		}
+		if e.Digest != want {
+			t.Fatalf("%s digest: %s", e.ID, e.Digest)
+		}
+	}
+	runFails(t, "unexpected pushed digest", "build", "-adapters", "../../adapters", "-plan", file, "-digest", "yookassa="+digestB, "-out", out)
+	runFails(t, "no digest for adapter rollypay", "build", "-adapters", "../../adapters", "-plan", file, "-out", out)
 }

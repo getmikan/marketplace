@@ -27,14 +27,15 @@ const (
 
 // fakeRolly answers like RollyPay. One payment per order_id; a second create is a 409.
 type fakeRolly struct {
-	mu           sync.Mutex
-	payments     map[string]*payment // by order_id
-	status       string
-	statusAmount string
-	nonces       map[string]bool
-	created      []map[string]any
-	testMode     []bool
-	listWrap     bool // the list answer is {"data": [...]}
+	mu             sync.Mutex
+	payments       map[string]*payment // by order_id
+	status         string
+	statusAmount   string
+	emptyTerminals bool
+	nonces         map[string]bool
+	created        []map[string]any
+	testMode       []bool
+	listWrap       bool // the list answer is {"data": [...]}
 }
 
 func (f *fakeRolly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +54,11 @@ func (f *fakeRolly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"terminal_id is required"}`))
 	case r.Method == http.MethodGet && r.URL.Path == "/terminals":
-		_, _ = w.Write([]byte(`{"id":"d290f1ee-6c54-4b01-90e6-d701748f0851"}`))
+		if f.emptyTerminals {
+			_, _ = w.Write([]byte(`[]`))
+		} else {
+			_, _ = w.Write([]byte(`[{"id":"d290f1ee-6c54-4b01-90e6-d701748f0851"}]`))
+		}
 	case r.Method == http.MethodPost && r.URL.Path == "/payments":
 		var in map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&in)
@@ -185,7 +190,11 @@ func TestCheck(t *testing.T) {
 	if code, out := e.call(http.MethodPost, "/v1/check", map[string]any{"settings": settings()}); code != http.StatusOK || len(out) != 0 {
 		t.Fatalf("good key: %d %v", code, out)
 	}
-	code, out := e.call(http.MethodPost, "/v1/check", map[string]any{"settings": settings("api_key", "rpk_live_wrong")})
+	e.fake.emptyTerminals = true
+	code, out := e.call(http.MethodPost, "/v1/check", map[string]any{"settings": settings()})
+	wantError(t, code, out, http.StatusBadGateway, adapter.CodeProviderUnavailable)
+	e.fake.emptyTerminals = false
+	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": settings("api_key", "rpk_live_wrong")})
 	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadCredentials)
 	if strings.Contains(out["message"].(string), "nonce") {
 		t.Fatalf("the provider's text leaked: %v", out)

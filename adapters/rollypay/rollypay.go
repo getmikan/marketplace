@@ -126,16 +126,18 @@ func fail(status int) error {
 // Check reads the terminal linked to the API key. RollyPay's balance endpoint
 // currently requires terminal_id even though the docs say the key is enough.
 func (p *rollyPay) Check(ctx context.Context, s adapter.Settings) error {
-	var terminal struct {
+	var terminals []struct {
 		ID string `json:"id"`
 	}
-	if _, err := p.call(ctx, s, http.MethodGet, "/terminals", nil, nil, &terminal); err != nil {
+	if _, err := p.call(ctx, s, http.MethodGet, "/terminals", nil, nil, &terminals); err != nil {
 		return err
 	}
-	if terminal.ID == "" {
-		return adapter.ProviderUnavailable("RollyPay gave no terminal ID")
+	for _, terminal := range terminals {
+		if terminal.ID != "" {
+			return nil
+		}
 	}
-	return nil
+	return adapter.ProviderUnavailable("RollyPay gave no terminal ID")
 }
 
 type payment struct {

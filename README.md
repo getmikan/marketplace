@@ -55,8 +55,8 @@ curl -H 'Authorization: Bearer test' http://127.0.0.1:41873/v1/info
        "homepage": "https://github.com/getmikan/marketplace/tree/main/adapters/examplepay"
      }
      ```
-     `version` is the current catalog version: every adapter carries the same one (see
-     Releases).
+     `version` belongs to this adapter. Increase it when its code, Dockerfile,
+     embedded manifest, or shared server code changes.
    - `main.go` embeds `adapter.json` and calls `adapter.Run` with your provider, which
      implements `adapter.Provider` (and `adapter.Refunder` with the `refund` capability).
      The server validates the settings against your `Info().Settings`, checks invoice
@@ -76,18 +76,23 @@ curl -H 'Authorization: Bearer test' http://127.0.0.1:41873/v1/info
 
 ## Releases and signing
 
-One tag versions the whole catalog. To release `X.Y.Z`:
+Each adapter has its own version. To release a changed adapter, increase only its
+`adapter.json` version and merge the change to `main`. [release.yml](.github/workflows/release.yml)
+then:
 
-1. Set `"version": "X.Y.Z"` in every `adapters/*/adapter.json` and merge to `main`.
-2. Push the tag `vX.Y.Z` on `main`. [release.yml](.github/workflows/release.yml) then:
-   - tests, and checks that every adapter is at `X.Y.Z` before anything is pushed;
-   - builds and pushes each adapter for amd64 and arm64 to
-     `ghcr.io/getmikan/adapter-<id>:X.Y.Z`;
-   - writes `dist/index.json` with the pushed digests and signs it
-     (`go run ./cmd/index build`), then verifies it with the release public key;
-   - publishes the GitHub release `vX.Y.Z` with `index.json` and `index.json.sig`, which
-     the panel reads from `releases/latest/download/`. A tag with a pre-release suffix
-     (`vX.Y.Z-rc.1`) is published as a pre-release, which `latest` skips.
+1. Runs tests and verifies the previous release's `index.json.sig` with the trusted
+   release public key. It compares the previous release tag with the new commit.
+2. Requires a newer adapter version for changes to its image inputs. Documentation and
+   tests alone need no bump. A change to shared server code or Go dependencies requires
+   a version increase for every adapter.
+3. Builds and pushes only changed images for amd64 and arm64, each tagged with its own
+   adapter version. Unchanged image digests come from the verified previous catalog.
+4. Signs a new complete catalog and publishes it under an automatic `catalog-<run>-<attempt>`
+   tag. The panel reads `releases/latest/download/index.json`.
+
+Unrelated documentation and workflow changes do not publish a new catalog. An unavailable
+previous release, invalid signature, unknown image input, or missing digest fails the
+release. Adapter removal needs a separate explicit process.
 
 `index.json.sig` is `base64(ed25519.Sign(key, <exact bytes of index.json>))`, the same
 format as the panel's release manifest, and the panel and the host check it with the same
