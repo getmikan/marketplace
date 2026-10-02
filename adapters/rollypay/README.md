@@ -19,9 +19,9 @@ Set the notification URL the panel shows for this adapter as the terminal's `cal
 
 | | |
 |---|---|
-| check | `GET /balance` with the key; 401 → `bad_credentials` |
+| check | `GET /terminals` with the key; 401 → `bad_credentials`. The live balance endpoint requires `terminal_id` even with a terminal API key. |
 | invoice | `POST /payments` with `order_id` = the idempotency key (RollyPay: one order, one payment), the amount as `"199.00"`, `success_redirect_url` and `fail_redirect_url` = `return_url`. On 409 the live payment of that order is read from `GET /payments?order_id=` and returned; a closed one gives `rollypay_order_exists`. Every request carries a fresh `X-Nonce` |
-| status | `GET /payments/<id>`: `paid` → paid; `expired`, `canceled`, `chargeback`, `refunded` → canceled; `created`, `processing` → pending. Amount and currency are the order's (`amount`, `payment_currency`), not the USDT figures |
+| status | `GET /payments/<id>`: `paid` → paid; `expired`, `canceled`, `chargeback`, `refunded` → canceled; `created`, `processing` → pending. Amount and currency are the order's (`amount`, `payment_currency`), not the USDT figures. Extra zero decimal places in `amount` are accepted; fractional kopecks are rejected. |
 | webhook | `X-Signature` must be the hex HMAC-SHA256 of `X-Timestamp + "." + body` keyed with `signing_secret`, else `bad_request`. `payment.paid` names the payment, other events are ignored. A late `paid` after `expired` is caught by the panel's status call |
 | refund | not supported (no `refund` capability) |
 

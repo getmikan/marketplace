@@ -27,13 +27,14 @@ const (
 
 // fakeRolly answers like RollyPay. One payment per order_id; a second create is a 409.
 type fakeRolly struct {
-	mu       sync.Mutex
-	payments map[string]*payment // by order_id
-	status   string
-	nonces   map[string]bool
-	created  []map[string]any
-	testMode []bool
-	listWrap bool // the list answer is {"data": [...]}
+	mu           sync.Mutex
+	payments     map[string]*payment // by order_id
+	status       string
+	statusAmount string
+	nonces       map[string]bool
+	created      []map[string]any
+	testMode     []bool
+	listWrap     bool // the list answer is {"data": [...]}
 }
 
 func (f *fakeRolly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +50,10 @@ func (f *fakeRolly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.testMode = append(f.testMode, r.Header.Get("X-Test-Mode") == "true")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/balance":
-		_, _ = w.Write([]byte(`{"available_usdt":"1.00","hold_usdt":"0"}`))
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"terminal_id is required"}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/terminals":
+		_, _ = w.Write([]byte(`{"id":"d290f1ee-6c54-4b01-90e6-d701748f0851"}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/payments":
 		var in map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&in)
@@ -79,6 +83,9 @@ func (f *fakeRolly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c := *p
 			if f.status != "" {
 				c.Status = f.status
+			}
+			if f.statusAmount != "" {
+				c.Amount = json.Number(f.statusAmount)
 			}
 			_ = json.NewEncoder(w).Encode(c)
 			return
@@ -239,6 +246,7 @@ func TestCreateInvoiceMethodAndSandbox(t *testing.T) {
 func TestStatus(t *testing.T) {
 	e := newEnv(t)
 	e.call(http.MethodPost, "/v1/invoices", invoiceBody(settings()))
+	e.fake.statusAmount = "199.00000000"
 	for status, want := range map[string]string{"created": "pending", "processing": "pending", "paid": "paid",
 		"expired": "canceled", "canceled": "canceled", "chargeback": "canceled", "refunded": "canceled", "new-thing": "pending"} {
 		e.fake.status = status
@@ -247,7 +255,11 @@ func TestStatus(t *testing.T) {
 			t.Fatalf("%s: %d %v", status, code, out)
 		}
 	}
-	code, out := e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "pay_other"})
+	e.fake.statusAmount = "199.00100000"
+	code, out := e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": payID})
+	wantError(t, code, out, http.StatusBadGateway, adapter.CodeProviderUnavailable)
+	e.fake.statusAmount = ""
+	code, out = e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "pay_other"})
 	wantError(t, code, out, http.StatusNotFound, adapter.CodeNotFound)
 	code, out = e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "../balance"})
 	wantError(t, code, out, http.StatusBadRequest, adapter.CodeBadRequest)

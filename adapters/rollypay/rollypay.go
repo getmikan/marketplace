@@ -123,10 +123,19 @@ func fail(status int) error {
 	return adapter.Refused("rollypay_http_"+strconv.Itoa(status), fmt.Sprintf("RollyPay refused the request (HTTP %d)", status))
 }
 
-// Check reads the terminal's balance: it needs only a valid key.
+// Check reads the terminal linked to the API key. RollyPay's balance endpoint
+// currently requires terminal_id even though the docs say the key is enough.
 func (p *rollyPay) Check(ctx context.Context, s adapter.Settings) error {
-	_, err := p.call(ctx, s, http.MethodGet, "/balance", nil, nil, nil)
-	return err
+	var terminal struct {
+		ID string `json:"id"`
+	}
+	if _, err := p.call(ctx, s, http.MethodGet, "/terminals", nil, nil, &terminal); err != nil {
+		return err
+	}
+	if terminal.ID == "" {
+		return adapter.ProviderUnavailable("RollyPay gave no terminal ID")
+	}
+	return nil
 }
 
 type payment struct {
@@ -225,7 +234,7 @@ func (p *rollyPay) Status(ctx context.Context, s adapter.Settings, externalID st
 	if _, err := p.call(ctx, s, http.MethodGet, "/payments/"+externalID, nil, nil, &pay); err != nil {
 		return adapter.Status{}, err
 	}
-	amount, ok := adapter.ParseMinor(pay.Amount.String())
+	amount, ok := parseRollyAmount(pay.Amount)
 	if !ok || pay.Currency == "" {
 		return adapter.Status{}, adapter.ProviderUnavailable("RollyPay gave a payment without an amount")
 	}
@@ -237,6 +246,21 @@ func (p *rollyPay) Status(ctx context.Context, s adapter.Settings, externalID st
 		st = adapter.StatusCanceled
 	}
 	return adapter.Status{Status: st, Amount: amount, Currency: pay.Currency}, nil
+}
+
+// RollyPay may serialize a RUB amount with eight decimal places. Accept only
+// extra zeroes so a fractional kopeck can never be treated as paid in full.
+func parseRollyAmount(n json.Number) (int64, bool) {
+	s := n.String()
+	if whole, frac, ok := strings.Cut(s, "."); ok {
+		frac = strings.TrimRight(frac, "0")
+		if frac == "" {
+			s = whole
+		} else {
+			s = whole + "." + frac
+		}
+	}
+	return adapter.ParseMinor(s)
 }
 
 // Webhook checks X-Signature: the hex HMAC-SHA256 of "<X-Timestamp>.<body>" keyed with
