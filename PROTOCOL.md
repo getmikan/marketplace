@@ -190,6 +190,7 @@ of [getmikan/marketplace](https://github.com/getmikan/marketplace):
   "adapters": [
     {
       "id": "yookassa",
+      "category": "payments",
       "name": {"ru": "ЮKassa", "en": "YooKassa"},
       "description": {"ru": "Банковские карты и СБП", "en": "Bank cards and SBP"},
       "version": "1.0.0",
@@ -197,7 +198,7 @@ of [getmikan/marketplace](https://github.com/getmikan/marketplace):
       "image": "ghcr.io/getmikan/adapter-yookassa",
       "digest": "sha256:…",
       "min_panel": "0.4.3",
-      "homepage": "https://github.com/getmikan/marketplace/tree/main/adapters/yookassa"
+      "homepage": "https://github.com/getmikan/marketplace/tree/main/payments/yookassa"
     }
   ]
 }
@@ -207,6 +208,10 @@ of [getmikan/marketplace](https://github.com/getmikan/marketplace):
 - `id`: lowercase letters, digits and dashes. `image` is `ghcr.io/getmikan/adapter-<id>`;
   images are pulled **by digest only** (`image@digest`), the multi-arch (amd64, arm64)
   index digest.
+- `category`: the package, `payments` or `tools`. The `adapters` list holds both, so a
+  catalog from before the packages, without `category`, holds payment adapters. A payment
+  adapter speaks this protocol (1); a tool never does, so a panel that knows no categories
+  never offers a tool as a payment method. A tool's image is `ghcr.io/getmikan/tool-<id>`.
 - `min_panel`: the oldest panel version that may install it.
 - An adapter whose `protocol` the panel does not know is not offered.
 

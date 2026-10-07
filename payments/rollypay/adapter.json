@@ -1,10 +1,11 @@
 {
   "id": "rollypay",
+  "category": "payments",
   "name": {"ru": "RollyPay", "en": "RollyPay"},
   "description": {"ru": "СБП, карты и криптовалюта через RollyPay", "en": "SBP, cards and crypto through RollyPay"},
-  "version": "1.0.4",
+  "version": "1.0.5",
   "protocol": 1,
   "image": "ghcr.io/getmikan/adapter-rollypay",
   "min_panel": "0.4.3",
-  "homepage": "https://github.com/getmikan/marketplace/tree/main/adapters/rollypay"
+  "homepage": "https://github.com/getmikan/marketplace/tree/main/payments/rollypay"
 }

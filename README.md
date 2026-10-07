@@ -1,28 +1,31 @@
 # mikan marketplace
 
-Payment adapters for the [mikan](https://github.com/Miroshka000/mikan) VPN panel, and the
-signed catalog the panel installs them from.
+Addons for the [mikan](https://github.com/Miroshka000/mikan) VPN panel, and the signed
+catalog the panel installs them from. They come in packages:
 
-An adapter is a small stateless HTTP service that connects the panel to one payment
-provider. The panel lists the catalog under Payments → «Добавить способ оплаты»; the host
-pulls the adapter's image by digest and runs it next to the panel, on loopback. The
-contract between them is [PROTOCOL.md](PROTOCOL.md).
+- [`payments/`](payments): payment methods. Each is a small stateless HTTP service that
+  connects the panel to one payment provider. The panel lists them under Payments →
+  «Добавить способ оплаты»; the host pulls the adapter's image by digest and runs it next
+  to the panel, on loopback. The contract between them is [PROTOCOL.md](PROTOCOL.md).
+- [`tools/`](tools): tools, such as the Telegram bot. Their protocol is being designed;
+  see [tools/README.md](tools/README.md).
 
-## Adapters
+## Payment methods
 
 | id | Provider | Currencies | Capabilities |
 |---|---|---|---|
-| [`yookassa`](adapters/yookassa) | ЮKassa: bank cards and SBP | RUB | webhook, refund |
-| [`cryptobot`](adapters/cryptobot) | @CryptoBot (Crypto Pay): cryptocurrency, priced in fiat | RUB, USD, EUR | webhook |
-| [`platega`](adapters/platega) | Platega: SBP, cards, Sberpay, crypto | RUB | webhook |
-| [`rollypay`](adapters/rollypay) | RollyPay: SBP, cards, crypto | RUB | webhook |
+| [`yookassa`](payments/yookassa) | ЮKassa: bank cards and SBP | RUB | webhook, refund |
+| [`cryptobot`](payments/cryptobot) | @CryptoBot (Crypto Pay): cryptocurrency, priced in fiat | RUB, USD, EUR | webhook |
+| [`platega`](payments/platega) | Platega: SBP, cards, Sberpay, crypto | RUB | webhook |
+| [`rollypay`](payments/rollypay) | RollyPay: SBP, cards, crypto | RUB | webhook |
 
 Each needs panel 0.4.3 or later.
 
 ## Layout
 
 ```
-adapters/<id>/       one adapter: main.go, the provider client, tests, adapter.json, Dockerfile
+payments/<id>/       one payment adapter: main.go, the provider client, tests, adapter.json, Dockerfile
+tools/<id>/          one tool, laid out the same way
 internal/adapter/    the shared server: env, loopback check, Bearer auth, limits, errors, settings validation
 internal/catalog/    adapter.json and index.json: types, checks, signing
 cmd/index/           builds and signs dist/index.json; verifies it
@@ -33,30 +36,33 @@ Go 1.27, standard library only.
 
 ```sh
 gofmt -l . && go vet ./... && go test ./...
-docker buildx build --platform linux/amd64 -f adapters/yookassa/Dockerfile -t adapter-yookassa:dev --load .
+docker buildx build --platform linux/amd64 -f payments/yookassa/Dockerfile -t adapter-yookassa:dev --load .
 docker run --rm --network host -e MIKAN_ADAPTER_LISTEN=127.0.0.1:41873 -e MIKAN_ADAPTER_TOKEN=test adapter-yookassa:dev
 curl -H 'Authorization: Bearer test' http://127.0.0.1:41873/v1/info
 ```
 
-## Writing an adapter
+## Writing a payment adapter
 
 1. Read [PROTOCOL.md](PROTOCOL.md), especially the security section.
-2. Create `adapters/<id>/` (lowercase letters, digits, dashes):
+2. Create `payments/<id>/` (lowercase letters, digits, dashes; an id is unique across the
+   packages):
    - `adapter.json`, the catalog entry without the digest:
      ```json
      {
        "id": "examplepay",
+       "category": "payments",
        "name": {"ru": "Example Pay", "en": "Example Pay"},
        "description": {"ru": "Карты", "en": "Cards"},
        "version": "1.0.0",
        "protocol": 1,
        "image": "ghcr.io/getmikan/adapter-examplepay",
        "min_panel": "0.4.3",
-       "homepage": "https://github.com/getmikan/marketplace/tree/main/adapters/examplepay"
+       "homepage": "https://github.com/getmikan/marketplace/tree/main/payments/examplepay"
      }
      ```
-     `version` belongs to this adapter. Increase it when its code, Dockerfile,
-     embedded manifest, or shared server code changes.
+     `category` is the package, the directory it is in. `version` belongs to this
+     adapter. Increase it when its code, Dockerfile, embedded manifest, or shared server
+     code changes.
    - `main.go` embeds `adapter.json` and calls `adapter.Run` with your provider, which
      implements `adapter.Provider` (and `adapter.Refunder` with the `refund` capability).
      The server validates the settings against your `Info().Settings`, checks invoice
@@ -67,8 +73,7 @@ curl -H 'Authorization: Bearer test' http://127.0.0.1:41873/v1/info
    - Tests with an `httptest` fake of the provider, through `adapter.NewHandler`: info,
      check with good and bad credentials, the idempotency key and the amount of a new
      invoice, the status mapping with amount and currency, a valid, a forged and an
-     ignored webhook, and that the secrets never reach the log. The two adapters here show
-     how.
+     ignored webhook, and that the secrets never reach the log. The adapters here show how.
    - `Dockerfile`: copy one of the existing ones and change the id.
    - `README.md`: the settings, where to find them, the webhook setup.
 3. Open a pull request. CI runs gofmt, vet, the tests and builds the image for amd64 and
@@ -103,7 +108,8 @@ Before the first release the maintainer must:
 - add the repository secret **`MARKETPLACE_SIGNING_KEY`**: the PEM (PKCS#8) Ed25519
   private key, **the same key as the panel's `RELEASE_SIGNING_KEY`**. The workflow refuses
   to publish a catalog that this public key does not verify;
-- after the first push of each image, make the package `adapter-<id>` **public** in the
+- after the first push of each image, make the package `adapter-<id>` (`tool-<id>` for a
+  tool) **public** in the
   organization's packages settings (GitHub creates new packages private, and the host pulls
   without credentials), and check that it is linked to this repository.
 
