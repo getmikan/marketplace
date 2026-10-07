@@ -83,10 +83,10 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
-          file: adapters/${{ matrix.adapter.id }}/Dockerfile
+          file: ${{ matrix.adapter.dir }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/getmikan/adapter-${{ matrix.adapter.id }}:${{ matrix.adapter.version }}
+          tags: ${{ matrix.adapter.image }}:${{ matrix.adapter.version }}
           cache-from: type=gha,scope=${{ matrix.adapter.id }}
           cache-to: type=gha,mode=max,scope=${{ matrix.adapter.id }}
       - name: Record digest

@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1.7
 # Build from the repository root:
-#   docker buildx build --platform linux/amd64,linux/arm64 -f adapters/rollypay/Dockerfile .
+#   docker buildx build --platform linux/amd64,linux/arm64 -f payments/yookassa/Dockerfile .
 # Go cross-compiles on the build platform; only the final stage is the target's.
 FROM --platform=$BUILDPLATFORM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod ./
 COPY internal/ internal/
-COPY adapters/rollypay/ adapters/rollypay/
+COPY payments/yookassa/ payments/yookassa/
 # Filled in by BuildKit for each platform. A default here would win over it and put
 # amd64 binaries into the arm64 image.
 ARG TARGETOS TARGETARCH
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /out/adapter ./adapters/rollypay
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /out/adapter ./payments/yookassa
 # The binary must be the image's own architecture: the ELF machine field says so.
 RUN case "$TARGETARCH" in amd64) want="3e 00" ;; arm64) want="b7 00" ;; *) want="" ;; esac; \
     got=$(od -A n -t x1 -j 18 -N 2 /out/adapter | tr -s " " | sed "s/^ //"); \

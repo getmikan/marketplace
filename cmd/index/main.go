@@ -1,7 +1,8 @@
 // index builds and signs the adapter catalog (used by .github/workflows/release.yml).
 //
 //	index list
-//	    checks every adapters/*/adapter.json and prints their ids as a JSON array
+//	    checks every payments/*/adapter.json and tools/*/adapter.json and prints the
+//	    adapters as a JSON array of {"id", "dir", "image"}
 //	index plan -previous previous/index.json -base v1.0.3 -out plan.json
 //	    selects changed adapters and reuses signed digests for the others
 //	MARKETPLACE_SIGNING_KEY="$(cat key.pem)" index build \
@@ -21,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,48 +53,69 @@ func run(args []string, out io.Writer) error {
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
-// manifests reads dir/*/adapter.json; each must sit in a directory named after its id.
-func manifests(dir string) ([]catalog.Manifest, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "*", "adapter.json"))
-	if err != nil {
-		return nil, err
-	}
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no %s/*/adapter.json", dir)
-	}
+// manifests reads <category>/*/adapter.json under root for every package; each must sit
+// in a directory named after its id, in the directory of its category.
+func manifests(root string) ([]catalog.Manifest, error) {
 	var ms []catalog.Manifest
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
+	seen := map[string]string{}
+	for _, category := range catalog.Categories {
+		paths, err := filepath.Glob(filepath.Join(root, category, "*", "adapter.json"))
 		if err != nil {
 			return nil, err
 		}
-		m, err := catalog.ParseManifest(data)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+		for _, p := range paths {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return nil, err
+			}
+			m, err := catalog.ParseManifest(data)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", p, err)
+			}
+			if name := filepath.Base(filepath.Dir(p)); m.ID != name {
+				return nil, fmt.Errorf("%s: id %q, but the directory is %q", p, m.ID, name)
+			}
+			if m.Category != category {
+				return nil, fmt.Errorf("%s: category %q, but it is in %s/", p, m.Category, category)
+			}
+			if other, dup := seen[m.ID]; dup {
+				return nil, fmt.Errorf("%s: id %q is taken in %s/", p, m.ID, other)
+			}
+			seen[m.ID] = category
+			ms = append(ms, m)
 		}
-		if name := filepath.Base(filepath.Dir(p)); m.ID != name {
-			return nil, fmt.Errorf("%s: id %q, but the directory is %q", p, m.ID, name)
-		}
-		ms = append(ms, m)
+	}
+	if len(ms) == 0 {
+		return nil, fmt.Errorf("no adapters in %s", strings.Join(catalog.Categories, "/, ")+"/")
 	}
 	return ms, nil
 }
 
+// dir is where an adapter's code and Dockerfile are, from the repository root.
+func dir(m catalog.Manifest) string { return m.Category + "/" + m.ID }
+
+// listed is an adapter as list prints it, for the CI's image matrix.
+type listed struct {
+	ID    string `json:"id"`
+	Dir   string `json:"dir"`
+	Image string `json:"image"`
+}
+
 func list(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	dir := fs.String("adapters", "adapters", "where the adapters are")
+	root := fs.String("root", ".", "the repository root, where the packages are")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	ms, err := manifests(*dir)
+	ms, err := manifests(*root)
 	if err != nil {
 		return err
 	}
-	ids := make([]string, len(ms))
+	l := make([]listed, len(ms))
 	for i, m := range ms {
-		ids[i] = m.ID
+		l[i] = listed{ID: m.ID, Dir: dir(m), Image: m.Image}
 	}
-	return json.NewEncoder(out).Encode(ids)
+	return json.NewEncoder(out).Encode(l)
 }
 
 // digests is the repeatable -digest id=sha256:… flag.
@@ -101,6 +124,8 @@ type digests map[string]string
 type buildAdapter struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
+	Dir     string `json:"dir"`
+	Image   string `json:"image"`
 }
 
 type releasePlan struct {
@@ -112,7 +137,7 @@ type releasePlan struct {
 // HEAD. All image inputs are covered; changed image code requires a new version.
 func plan(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
-	dir := fs.String("adapters", "adapters", "where the adapters are")
+	root := fs.String("root", ".", "the repository root, where the packages are")
 	previous := fs.String("previous", "", "previous signed index.json")
 	base := fs.String("base", "", "Git tag of the previous release")
 	outFile := fs.String("out", "plan.json", "release plan output")
@@ -139,7 +164,7 @@ func plan(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("previous catalog: %w", err)
 	}
-	ms, err := manifests(*dir)
+	ms, err := manifests(*root)
 	if err != nil {
 		return err
 	}
@@ -177,7 +202,7 @@ func makeReleasePlan(ms []catalog.Manifest, prev catalog.Index, paths []string) 
 		switch {
 		case strings.HasSuffix(path, ".md") || strings.HasSuffix(path, "_test.go"):
 			// Documentation and tests are not inputs to the final adapter binary.
-		case len(parts) > 1 && parts[0] == "adapters":
+		case len(parts) > 1 && isPackage(parts[0]):
 			changed[parts[1]] = true
 		case path == "go.mod" || path == "go.sum" || strings.HasPrefix(path, "internal/adapter/"):
 			shared = true
@@ -201,7 +226,7 @@ func makeReleasePlan(ms []catalog.Manifest, prev catalog.Index, paths []string) 
 			return p, fmt.Errorf("adapter %s changed but version is still %s; bump its version", m.ID, m.Version)
 		}
 		if needsBuild {
-			p.Build = append(p.Build, buildAdapter{m.ID, m.Version})
+			p.Build = append(p.Build, buildAdapter{ID: m.ID, Version: m.Version, Dir: dir(m), Image: m.Image})
 		} else {
 			p.Reuse[m.ID] = e.Digest
 		}
@@ -211,6 +236,12 @@ func makeReleasePlan(ms []catalog.Manifest, prev catalog.Index, paths []string) 
 		return p, fmt.Errorf("adapter removed from catalog; handle removal explicitly: %v", old)
 	}
 	return p, nil
+}
+
+// isPackage tells a package directory, or adapters/, where the payment adapters were
+// before the packages.
+func isPackage(name string) bool {
+	return name == "adapters" || slices.Contains(catalog.Categories, name)
 }
 
 // compareVersion compares the x.y.z and optional prerelease forms accepted by
@@ -301,7 +332,7 @@ func (d digests) Set(v string) error {
 
 func build(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	dir := fs.String("adapters", "adapters", "where the adapters are")
+	root := fs.String("root", ".", "the repository root, where the packages are")
 	outDir := fs.String("out", "dist", "output directory")
 	planFile := fs.String("plan", "", "plan.json with verified digests to reuse")
 	ds := digests{}
@@ -313,7 +344,7 @@ func build(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("MARKETPLACE_SIGNING_KEY: %w", err)
 	}
-	ms, err := manifests(*dir)
+	ms, err := manifests(*root)
 	if err != nil {
 		return err
 	}
@@ -348,8 +379,8 @@ func build(args []string, out io.Writer) error {
 				return fmt.Errorf("plan: missing adapter %s", m.ID)
 			}
 			for _, b := range p.Build {
-				if b.ID == m.ID && b.Version != m.Version {
-					return fmt.Errorf("plan: version mismatch for %s", m.ID)
+				if b.ID == m.ID && (b.Version != m.Version || b.Dir != dir(m) || b.Image != m.Image) {
+					return fmt.Errorf("plan: version or place mismatch for %s", m.ID)
 				}
 			}
 		}
@@ -409,7 +440,7 @@ func verify(args []string, out io.Writer) error {
 		return err
 	}
 	for _, e := range idx.Adapters {
-		fmt.Fprintf(out, "ok: %s %s %s@%s\n", e.ID, e.Version, e.Image, e.Digest)
+		fmt.Fprintf(out, "ok: %s %s %s %s@%s\n", e.Category, e.ID, e.Version, e.Image, e.Digest)
 	}
 	return nil
 }

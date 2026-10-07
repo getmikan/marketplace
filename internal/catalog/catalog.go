@@ -1,5 +1,6 @@
 // Package catalog is the signed list of adapters the panel offers (index.json) and the
-// adapter.json each adapter directory describes itself with.
+// adapter.json each adapter directory describes itself with. Adapters come in packages,
+// one directory each: payments/ for the payment methods, tools/ for the tools.
 //
 // index.json is signed like the panel's release manifest: .sig holds
 // base64(ed25519.Sign(key, the file's exact bytes)), and the panel and the host trust it
@@ -28,12 +29,38 @@ const PublicKey = "Z3wSIPBSaJxh5CsGO8eINI0aM0kyrQ46EcJSNeH85W8="
 // Format is the index.json format version ("version" in the file).
 const Format = 1
 
-// ImagePrefix is where adapter images are published: ImagePrefix + id.
+// The packages: an adapter's category is the directory it sits in.
+const (
+	Payments = "payments"
+	Tools    = "tools"
+)
+
+// Categories are the packages, in the order they are listed.
+var Categories = []string{Payments, Tools}
+
+// PaymentProtocol is the protocol of the payment adapters (PROTOCOL.md). Panels that know
+// no categories offer every entry of this protocol as a payment method, so a tool never
+// speaks it.
+const PaymentProtocol = 1
+
+// ImagePrefix is where the payment adapters' images are published: ImagePrefix + id.
 const ImagePrefix = "ghcr.io/getmikan/adapter-"
+
+// ToolImagePrefix is where the tools' images are published: ToolImagePrefix + id.
+const ToolImagePrefix = "ghcr.io/getmikan/tool-"
+
+// ImageFor is the image an adapter of the category is published as.
+func ImageFor(category, id string) string {
+	if category == Tools {
+		return ToolImagePrefix + id
+	}
+	return ImagePrefix + id
+}
 
 // Manifest is an adapter's adapter.json: its catalog entry without the image digest.
 type Manifest struct {
 	ID          string            `json:"id"`
+	Category    string            `json:"category"`
 	Name        map[string]string `json:"name"`
 	Description map[string]string `json:"description"`
 	Version     string            `json:"version"`
@@ -46,6 +73,7 @@ type Manifest struct {
 // Entry is one adapter in index.json.
 type Entry struct {
 	ID          string            `json:"id"`
+	Category    string            `json:"category"`
 	Name        map[string]string `json:"name"`
 	Description map[string]string `json:"description"`
 	Version     string            `json:"version"`
@@ -84,14 +112,20 @@ func (m Manifest) Check() error {
 	switch {
 	case !idRe.MatchString(m.ID):
 		return fmt.Errorf("adapter %q: id must be lowercase letters, digits and dashes", m.ID)
+	case m.Category != Payments && m.Category != Tools:
+		return fmt.Errorf("adapter %s: category %q is not %s", m.ID, m.Category, strings.Join(Categories, " or "))
 	case m.Name["ru"] == "" || m.Name["en"] == "" || m.Description["ru"] == "" || m.Description["en"] == "":
 		return fmt.Errorf("adapter %s: name and description need ru and en", m.ID)
 	case !versionRe.MatchString(m.Version):
 		return fmt.Errorf("adapter %s: version %q is not x.y.z", m.ID, m.Version)
 	case m.Protocol < 1:
 		return fmt.Errorf("adapter %s: protocol %d", m.ID, m.Protocol)
-	case m.Image != ImagePrefix+m.ID:
-		return fmt.Errorf("adapter %s: image must be %s%s", m.ID, ImagePrefix, m.ID)
+	case m.Category == Payments && m.Protocol != PaymentProtocol:
+		return fmt.Errorf("adapter %s: a payment adapter speaks protocol %d", m.ID, PaymentProtocol)
+	case m.Category == Tools && m.Protocol == PaymentProtocol:
+		return fmt.Errorf("adapter %s: a tool cannot speak protocol %d, older panels would take it for a payment method", m.ID, PaymentProtocol)
+	case m.Image != ImageFor(m.Category, m.ID):
+		return fmt.Errorf("adapter %s: image must be %s", m.ID, ImageFor(m.Category, m.ID))
 	case !versionRe.MatchString(m.MinPanel):
 		return fmt.Errorf("adapter %s: min_panel %q is not x.y.z", m.ID, m.MinPanel)
 	case !strings.HasPrefix(m.Homepage, "https://"):
@@ -109,7 +143,7 @@ func Build(manifests []Manifest, digests map[string]string, updated time.Time) (
 		if !ok {
 			return idx, fmt.Errorf("no digest for adapter %s", m.ID)
 		}
-		idx.Adapters = append(idx.Adapters, Entry{ID: m.ID, Name: m.Name, Description: m.Description, Version: m.Version,
+		idx.Adapters = append(idx.Adapters, Entry{ID: m.ID, Category: m.Category, Name: m.Name, Description: m.Description, Version: m.Version,
 			Protocol: m.Protocol, Image: m.Image, Digest: d, MinPanel: m.MinPanel, Homepage: m.Homepage})
 	}
 	if len(digests) != len(manifests) {
@@ -126,8 +160,11 @@ func (idx Index) Check() error {
 	}
 	seen := map[string]bool{}
 	for _, e := range idx.Adapters {
-		m := Manifest{ID: e.ID, Name: e.Name, Description: e.Description, Version: e.Version, Protocol: e.Protocol,
+		m := Manifest{ID: e.ID, Category: e.Category, Name: e.Name, Description: e.Description, Version: e.Version, Protocol: e.Protocol,
 			Image: e.Image, MinPanel: e.MinPanel, Homepage: e.Homepage}
+		if m.Category == "" {
+			m.Category = Payments // the catalogs from before the packages
+		}
 		if err := m.Check(); err != nil {
 			return err
 		}

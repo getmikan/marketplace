@@ -30,7 +30,7 @@ jobs:
           if [ -n "$unformatted" ]; then echo "not gofmt-ed:"; echo "$unformatted"; exit 1; fi
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      # Checks every adapter.json and lists the adapters for the image job.
+      # Checks every adapter.json and lists the adapters (id, dir, image) for the image job.
       - id: list
         run: echo "adapters=$(go run ./cmd/index list)" >> "$GITHUB_OUTPUT"
 
@@ -51,8 +51,8 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
-          file: adapters/${{ matrix.adapter }}/Dockerfile
+          file: ${{ matrix.adapter.dir }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
-          cache-from: type=gha,scope=${{ matrix.adapter }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.adapter }}
+          cache-from: type=gha,scope=${{ matrix.adapter.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.adapter.id }}
