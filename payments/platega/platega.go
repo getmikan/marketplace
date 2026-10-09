@@ -184,7 +184,7 @@ func (p *platega) Status(ctx context.Context, s adapter.Settings, externalID str
 	if err := p.call(ctx, s, http.MethodGet, "/transaction/"+externalID, nil, &res); err != nil {
 		return adapter.Status{}, err
 	}
-	amount, ok := adapter.ParseMinor(res.Details.Amount.String())
+	amount, ok := parseAmount(res.Details.Amount.String())
 	if !ok || res.Details.Currency == "" {
 		return adapter.Status{}, adapter.ProviderUnavailable("Platega gave a transaction without an amount")
 	}
@@ -196,6 +196,18 @@ func (p *platega) Status(ctx context.Context, s adapter.Settings, externalID str
 		st = adapter.StatusCanceled
 	}
 	return adapter.Status{Status: st, Amount: amount, Currency: res.Details.Currency}, nil
+}
+
+// parseAmount reads Platega's amount, which comes with sixteen decimals
+// (10.5000000000000000): past the cents only zeros may follow.
+func parseAmount(s string) (int64, bool) {
+	if whole, frac, ok := strings.Cut(s, "."); ok && len(frac) > 2 {
+		if strings.Trim(frac[2:], "0") != "" {
+			return 0, false
+		}
+		s = whole + "." + frac[:2]
+	}
+	return adapter.ParseMinor(s)
 }
 
 // Webhook checks X-MerchantId and X-Secret, which Platega puts on every callback, then
