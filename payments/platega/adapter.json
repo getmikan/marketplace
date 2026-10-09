@@ -3,7 +3,7 @@
   "category": "payments",
   "name": {"ru": "Platega", "en": "Platega"},
   "description": {"ru": "СБП, карты, Sberpay, криптовалюта через Platega", "en": "SBP, cards, Sberpay and crypto through Platega"},
-  "version": "1.0.4",
+  "version": "1.0.5",
   "protocol": 1,
   "image": "ghcr.io/getmikan/adapter-platega",
   "min_panel": "0.4.3",

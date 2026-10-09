@@ -207,7 +207,17 @@ func TestStatus(t *testing.T) {
 	if out["amount"] != 19950.0 {
 		t.Fatalf("fractional amount: %v", out)
 	}
-	code, out := e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "00000000-0000-0000-0000-000000000001"})
+	// What Platega really sends: sixteen decimals, the buyer's fee included.
+	e.fake.amount = "177.4500000000000000"
+	_, out = e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": txID})
+	if out["amount"] != 17745.0 {
+		t.Fatalf("amount with trailing zeros: %v", out)
+	}
+	// Past the cents only zeros may follow.
+	e.fake.amount = "177.4510000000000000"
+	code, out := e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": txID})
+	wantError(t, code, out, http.StatusBadGateway, adapter.CodeProviderUnavailable)
+	code, out = e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "00000000-0000-0000-0000-000000000001"})
 	wantError(t, code, out, http.StatusNotFound, adapter.CodeNotFound)
 	code, out = e.call(http.MethodPost, "/v1/status", map[string]any{"settings": settings(), "external_id": "../etc"})
 	wantError(t, code, out, http.StatusBadRequest, adapter.CodeBadRequest)
