@@ -123,7 +123,9 @@ panel calls it before saving changed settings.
 - `canceled` when it can no longer be paid (YooKassa `canceled`, CryptoBot `expired`).
 - Anything else is `pending`.
 - `amount` and `currency` are the provider's, not an echo of the request: the panel compares
-  them with the payment it created and refuses a mismatch.
+  them with the payment it created and refuses another currency or a smaller amount. A larger
+  one is the provider's fee charged to the buyer on top (Platega adds it once a method is
+  picked) and counts as paid from panel 0.5.0.5 on; older panels refuse it too.
 - `not_found` when the provider has no such invoice.
 
 ### `POST /v1/webhook`

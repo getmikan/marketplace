@@ -19,7 +19,7 @@ Under Callback URLs in the dashboard, enter the notification URL the panel shows
 |---|---|
 | check | `GET /transaction/<zero uuid>`: 404 means the credentials are accepted, 401 → `bad_credentials` |
 | invoice | `POST /v2/transaction/process` (or `/transaction/process` with `paymentMethod` when `method` is set); `orderId` and `payload` carry the idempotency key, `return` and `failedUrl` are `return_url`. Platega has no idempotency keys or lookup by order, so a retried request may open a second link; only the stored one is checked and an unpaid one expires |
-| status | `GET /transaction/<id>`: `CONFIRMED` → paid, `CANCELED` and `CHARGEBACKED` → canceled, else pending; amount and currency are Platega's |
+| status | `GET /transaction/<id>`: `CONFIRMED` → paid, `CANCELED` and `CHARGEBACKED` → canceled, else pending; amount and currency are Platega's: once the buyer picks a method the amount includes the fee Platega adds on top (5% for SBP), which panels before 0.5.0.5 refuse |
 | webhook | Platega sends `X-MerchantId` and `X-Secret` with every callback; both must equal the settings (constant time), else `bad_request`. `CONFIRMED` names the transaction, other statuses are ignored |
 | refund | not supported (no `refund` capability) |
 
