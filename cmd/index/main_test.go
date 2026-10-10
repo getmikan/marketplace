@@ -81,7 +81,7 @@ func TestListRealAdapters(t *testing.T) {
 			t.Errorf("%s: %+v", l.ID, l)
 		}
 	}
-	if strings.Join(ids, ",") != "cryptobot,platega,rollypay,yookassa" {
+	if strings.Join(ids, ",") != "cardlink,cryptobot,platega,rollypay,yookassa" {
 		t.Fatalf("index list: %v", ids)
 	}
 }
@@ -90,7 +90,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	pub := throwawayKey(t)
 	out := t.TempDir()
 	v := version(t)
-	runOK(t, "build", "-root", "../..", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-out", out)
+	runOK(t, "build", "-root", "../..", "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "cardlink="+digestB, "-out", out)
 	file := filepath.Join(out, "index.json")
 	got := runOK(t, "verify", "-key", pub, file)
 	if !strings.Contains(got, "ok: payments cryptobot ") || !strings.Contains(got, " ghcr.io/getmikan/adapter-cryptobot@"+digestB) ||
@@ -107,8 +107,8 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 		t.Fatal("the signature does not verify over the file's bytes")
 	}
 	idx, err := catalog.Verify(data, string(sig), key)
-	if err != nil || idx.Version != 1 || len(idx.Adapters) != 4 || idx.Adapters[3].Digest != digestA || idx.Adapters[3].MinPanel != "0.4.3" ||
-		idx.Adapters[3].Category != "payments" || !bytes.Contains(data, []byte(`"category": "payments"`)) {
+	if err != nil || idx.Version != 1 || len(idx.Adapters) != 5 || idx.Adapters[4].Digest != digestA || idx.Adapters[4].MinPanel != "0.4.3" ||
+		idx.Adapters[4].Category != "payments" || !bytes.Contains(data, []byte(`"category": "payments"`)) {
 		t.Fatalf("index: %v %+v", err, idx)
 	}
 
@@ -128,11 +128,11 @@ func TestBuildRefuses(t *testing.T) {
 	out := t.TempDir()
 	base := []string{"build", "-root", "../..", "-out", out}
 	runFails(t, "no digest for adapter", append(base, "-digest", "yookassa="+digestA)...)
-	runFails(t, "does not exist", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "stripe="+digestA)...)
+	runFails(t, "does not exist", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "cardlink="+digestB, "-digest", "stripe="+digestA)...)
 	runFails(t, "two digests", append(base, "-digest", "yookassa="+digestA, "-digest", "yookassa="+digestB)...)
-	runFails(t, "digest", append(base, "-digest", "yookassa=sha256:abc", "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB)...)
+	runFails(t, "digest", append(base, "-digest", "yookassa=sha256:abc", "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "cardlink="+digestB)...)
 	t.Setenv("MARKETPLACE_SIGNING_KEY", "")
-	runFails(t, "MARKETPLACE_SIGNING_KEY", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB)...)
+	runFails(t, "MARKETPLACE_SIGNING_KEY", append(base, "-digest", "yookassa="+digestA, "-digest", "cryptobot="+digestB, "-digest", "platega="+digestB, "-digest", "rollypay="+digestB, "-digest", "cardlink="+digestB)...)
 	if _, err := os.Stat(filepath.Join(out, "index.json")); err == nil {
 		t.Fatal("a refused build wrote index.json")
 	}
@@ -257,7 +257,7 @@ func TestReleasePlanOnlyChangedAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(p.Build) != 1 || p.Build[0].ID != "rollypay" || p.Build[0].Version != "9.0.0" || p.Build[0].Dir != "payments/rollypay" ||
-		p.Build[0].Image != "ghcr.io/getmikan/adapter-rollypay" || len(p.Reuse) != 3 {
+		p.Build[0].Image != "ghcr.io/getmikan/adapter-rollypay" || len(p.Reuse) != 4 {
 		t.Fatalf("plan: %+v", p)
 	}
 	for id, digest := range p.Reuse {
@@ -267,7 +267,7 @@ func TestReleasePlanOnlyChangedAdapter(t *testing.T) {
 	}
 	for i := range ms {
 		if ms[i].ID == "rollypay" {
-			ms[i].Version = prev.Adapters[2].Version
+			ms[i].Version = prev.Adapters[3].Version
 		}
 	}
 	if _, err := makeReleasePlan(ms, prev, []string{"payments/rollypay/rollypay.go"}); err == nil || !strings.Contains(err.Error(), "bump its version") {

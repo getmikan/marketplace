@@ -1,0 +1,11 @@
+{
+  "id": "cardlink",
+  "category": "payments",
+  "name": {"ru": "Cardlink", "en": "Cardlink"},
+  "description": {"ru": "Карты и СБП через Cardlink", "en": "Bank cards and SBP through Cardlink"},
+  "version": "1.0.0",
+  "protocol": 1,
+  "image": "ghcr.io/getmikan/adapter-cardlink",
+  "min_panel": "0.4.3",
+  "homepage": "https://github.com/getmikan/marketplace/tree/main/payments/cardlink"
+}
