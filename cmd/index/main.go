@@ -6,7 +6,8 @@
 //	index plan -previous previous/index.json -base v1.0.3 -out plan.json
 //	    selects changed adapters and reuses signed digests for the others
 //	MARKETPLACE_SIGNING_KEY="$(cat key.pem)" index build \
-//	    -digest yookassa=sha256:… -digest cryptobot=sha256:… -digest platega=sha256:… -digest rollypay=sha256:… -out dist
+//	    -digest yookassa=sha256:… -digest cryptobot=sha256:… -digest platega=sha256:… -digest rollypay=sha256:… \
+//	    -digest cardlink=sha256:… -out dist
 //	    writes dist/index.json and dist/index.json.sig
 //	index verify dist/index.json
 //	    checks dist/index.json.sig with the release public key (or -key)
