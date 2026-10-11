@@ -16,7 +16,7 @@ catalog the panel installs them from. They come in packages:
 |---|---|---|---|
 | [`yookassa`](payments/yookassa) | ЮKassa: bank cards and SBP | RUB | webhook, refund |
 | [`cryptobot`](payments/cryptobot) | @CryptoBot (Crypto Pay): cryptocurrency, priced in fiat | RUB, USD, EUR | webhook |
-| [`platega`](payments/platega) | Platega: SBP, cards, Sberpay, crypto | RUB | webhook |
+| [`platega`](payments/platega) | Platega: SBP, cards, Sberpay, crypto | RUB | webhook, refund |
 | [`rollypay`](payments/rollypay) | RollyPay: SBP, cards, crypto | RUB | webhook |
 
 Each needs panel 0.4.3 or later.

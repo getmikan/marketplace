@@ -21,7 +21,7 @@ Under Callback URLs in the dashboard, enter the notification URL the panel shows
 | invoice | `POST /v2/transaction/process` (or `/transaction/process` with `paymentMethod` when `method` is set); `orderId` and `payload` carry the idempotency key, `return` and `failedUrl` are `return_url`. Platega has no idempotency keys or lookup by order, so a retried request may open a second link; only the stored one is checked and an unpaid one expires |
 | status | `GET /transaction/<id>`: `CONFIRMED` → paid, `CANCELED` and `CHARGEBACKED` → canceled, else pending; amount and currency are Platega's: once the buyer picks a method the amount includes the fee Platega adds on top (5% for SBP), which panels before 0.5.0.5 refuse |
 | webhook | Platega sends `X-MerchantId` and `X-Secret` with every callback; both must equal the settings (constant time), else `bad_request`. `CONFIRMED` names the transaction, other statuses are ignored |
-| refund | not supported (no `refund` capability) |
+| refund | `GET /transaction/<id>`: `CANCELED` or `CHARGEBACKED` is refunded already (a retry cancels nothing twice), anything but `CONFIRMED` → `platega_not_paid`; an amount over the transaction's → `bad_request`. Then `GET /transaction/<id>/cancel-supported` (Platega cancels only while the merchant's balance covers the refund; `supported: false` → `platega_cancel_unsupported` with Platega's reason) and `POST /transaction/<id>/cancel`: accepted → done, left to Platega's support → `platega_refund_manual`, else `platega_refund_refused`. Platega cancels whole transactions only, so the payer gets back all they paid, the fee on top included |
 
 Errors: 401/403 → `bad_credentials`, 404 → `not_found`, 429 and 5xx → `provider_unavailable`,
 other refusals → `platega_http_<status>`.

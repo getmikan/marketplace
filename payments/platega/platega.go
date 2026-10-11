@@ -41,7 +41,7 @@ func (p *platega) Info() adapter.Info {
 		Version:      p.manifest.Version,
 		Name:         p.manifest.Name,
 		Currencies:   []string{"RUB"},
-		Capabilities: []string{adapter.CapWebhook},
+		Capabilities: []string{adapter.CapWebhook, adapter.CapRefund},
 		Settings: []adapter.Setting{
 			{Key: "merchant_id", Label: adapter.Text{"ru": "ID мерчанта", "en": "Merchant ID"}, Type: "string", Required: true, Pattern: uuidRe.String()},
 			{Key: "secret", Label: adapter.Text{"ru": "Секретный ключ", "en": "Secret key"}, Type: "string", Secret: true, Required: true, Pattern: `^[!-~]{1,200}$`},
@@ -50,10 +50,12 @@ func (p *platega) Info() adapter.Info {
 		Help: adapter.Text{
 			"ru": "ID мерчанта и секретный ключ — в личном кабинете Platega → Настройки. Там же в «Callback URLs» " +
 				"укажите адрес уведомлений из панели. Способ оплаты: 2 СБП, 3 ЕРИП, 11 карты, 12 международная, " +
-				"13 криптовалюта, 14 Sberpay; пусто — плательщик выберет сам.",
+				"13 криптовалюта, 14 Sberpay; пусто — плательщик выберет сам. Возврат — отмена транзакции в Platega: " +
+				"она проходит, только если на балансе мерчанта хватает суммы возврата.",
 			"en": "The merchant ID and the secret key are in the Platega dashboard → Settings. Enter the panel's " +
 				"notification URL under Callback URLs there. Payment method: 2 SBP, 3 ERIP, 11 cards, 12 international, " +
-				"13 crypto, 14 Sberpay; empty lets the payer choose.",
+				"13 crypto, 14 Sberpay; empty lets the payer choose. A refund cancels the transaction in Platega, " +
+				"which goes through only while the merchant's balance covers it.",
 		},
 	}
 }
@@ -196,6 +198,71 @@ func (p *platega) Status(ctx context.Context, s adapter.Settings, externalID str
 		st = adapter.StatusCanceled
 	}
 	return adapter.Status{Status: st, Amount: amount, Currency: res.Details.Currency}, nil
+}
+
+// Refund cancels the transaction, which gives the payer back all they paid: Platega
+// cancels whole transactions only, so the fee it added on top goes back too, and amount
+// (the panel's, the invoice's) may be less than the transaction but never more. First
+// GET /transaction/<id>: a transaction already CANCELED or CHARGEBACKED has its money back,
+// so a retried refund cancels nothing twice, and one not CONFIRMED is not Platega's to
+// refund. Then GET .../cancel-supported, as Platega asks: it cancels only while the
+// merchant's balance covers the refund. Then POST .../cancel; a cancel Platega does not
+// accept, or leaves to its support, is refused, and the panel shows why.
+func (p *platega) Refund(ctx context.Context, s adapter.Settings, externalID string, amount int64) error {
+	if !uuidRe.MatchString(externalID) {
+		return adapter.BadRequest("external_id is not a Platega transaction id")
+	}
+	var tx struct {
+		Status  string `json:"status"`
+		Details struct {
+			Amount json.Number `json:"amount"`
+		} `json:"paymentDetails"`
+	}
+	if err := p.call(ctx, s, http.MethodGet, "/transaction/"+externalID, nil, &tx); err != nil {
+		return err
+	}
+	switch tx.Status {
+	case "CANCELED", "CHARGEBACKED":
+		return nil
+	case "CONFIRMED":
+	default:
+		return adapter.Refused("platega_not_paid", "Platega refunds only a paid transaction")
+	}
+	paid, ok := parseAmount(tx.Details.Amount.String())
+	if !ok {
+		return adapter.ProviderUnavailable("Platega gave a transaction without an amount")
+	}
+	if amount > paid {
+		return adapter.BadRequest("the refund is more than the transaction")
+	}
+	var can struct {
+		Supported   bool   `json:"supported"`
+		BlockReason string `json:"blockReason"`
+	}
+	if err := p.call(ctx, s, http.MethodGet, "/transaction/"+externalID+"/cancel-supported", nil, &can); err != nil {
+		return err
+	}
+	if !can.Supported {
+		msg := "Platega cannot cancel this transaction now"
+		if r := adapter.Truncate(strings.TrimSpace(can.BlockReason), 100); r != "" {
+			msg += ": " + r
+		}
+		return adapter.Refused("platega_cancel_unsupported", msg)
+	}
+	var res struct {
+		Accepted bool `json:"accepted"`
+		Manual   bool `json:"manualControlRequired"`
+	}
+	if err := p.call(ctx, s, http.MethodPost, "/transaction/"+externalID+"/cancel", nil, &res); err != nil {
+		return err
+	}
+	switch {
+	case res.Accepted:
+		return nil
+	case res.Manual:
+		return adapter.Refused("platega_refund_manual", "Platega needs its support to finish this refund")
+	}
+	return adapter.Refused("platega_refund_refused", "Platega did not accept the refund")
 }
 
 // parseAmount reads Platega's amount, which comes with sixteen decimals

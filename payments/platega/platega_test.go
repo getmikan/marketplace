@@ -30,6 +30,10 @@ type fakePlatega struct {
 	currency string
 	paths    []string
 	created  []map[string]any
+	// What cancel-supported and cancel answer; a cancel it accepts makes the transaction
+	// CANCELED.
+	cancelBlocked string // supported false with this reason
+	cancelManual  bool   // accepted false, manualControlRequired true
 }
 
 func (f *fakePlatega) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +53,19 @@ func (f *fakePlatega) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/transaction/"+txID:
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": txID, "status": f.status,
 			"paymentDetails": map[string]any{"amount": f.amount, "currency": f.currency}})
+	case r.Method == http.MethodGet && r.URL.Path == "/transaction/"+txID+"/cancel-supported":
+		out := map[string]any{"supported": f.cancelBlocked == "", "totalDeductUsdt": 2.1, "penaltyUsdt": 0}
+		if f.cancelBlocked != "" {
+			out["blockReason"] = f.cancelBlocked
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	case r.Method == http.MethodPost && r.URL.Path == "/transaction/"+txID+"/cancel":
+		if f.cancelManual {
+			_ = json.NewEncoder(w).Encode(map[string]any{"transactionId": txID, "accepted": false, "manualControlRequired": true, "message": "Возврат в процессе"})
+			return
+		}
+		f.status = "CANCELED"
+		_ = json.NewEncoder(w).Encode(map[string]any{"transactionId": txID, "accepted": true, "manualControlRequired": false, "message": "ok"})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -125,7 +142,7 @@ func TestInfo(t *testing.T) {
 	if code != http.StatusOK || out["id"] != "platega" || out["protocol"] != 1.0 {
 		t.Fatalf("info: %d %v", code, out)
 	}
-	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook"]` {
+	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook","refund"]` {
 		t.Fatalf("capabilities: %s", got)
 	}
 	secrets := map[string]bool{}
@@ -264,4 +281,69 @@ func TestAuthRequired(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("no token: %d", w.Code)
 	}
+}
+
+func (e *env) refund(amount int64) (int, map[string]any) {
+	return e.call(http.MethodPost, "/v1/refund", map[string]any{"settings": settings(), "external_id": txID, "amount": amount})
+}
+
+func (e *env) cancels() int {
+	n := 0
+	for _, p := range e.fake.paths {
+		if p == "POST /transaction/"+txID+"/cancel" {
+			n++
+		}
+	}
+	return n
+}
+
+// A refund cancels the whole transaction after asking Platega whether it can: the fee the
+// buyer paid on top goes back too, so the panel's amount (the invoice's) may be less than
+// the transaction. A retry after the cancel finds it CANCELED and cancels nothing again.
+func TestRefund(t *testing.T) {
+	e := newEnv(t)
+	e.fake.status, e.fake.amount = "CONFIRMED", "105.0000000000000000" // 100 ₽ and SBP's 5% on top
+	if code, out := e.refund(10000); code != http.StatusOK || len(out) != 0 {
+		t.Fatalf("refund: %d %v", code, out)
+	}
+	want := []string{"GET /transaction/" + txID, "GET /transaction/" + txID + "/cancel-supported", "POST /transaction/" + txID + "/cancel"}
+	if strings.Join(e.fake.paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("calls: %v", e.fake.paths)
+	}
+	if code, out := e.refund(10000); code != http.StatusOK || len(out) != 0 || e.cancels() != 1 {
+		t.Fatalf("a retried refund: %d %v, %d cancels", code, out, e.cancels())
+	}
+	e.fake.status = "CHARGEBACKED"
+	if code, _ := e.refund(10000); code != http.StatusOK || e.cancels() != 1 {
+		t.Fatalf("a charged back transaction: %d, %d cancels", code, e.cancels())
+	}
+}
+
+// What Platega does not refund is refused with its reason, and nothing is cancelled.
+func TestRefundRefused(t *testing.T) {
+	e := newEnv(t)
+	e.fake.status, e.fake.amount = "PENDING", "100"
+	code, out := e.refund(10000)
+	wantError(t, code, out, http.StatusUnprocessableEntity, "platega_not_paid")
+
+	e.fake.status = "CONFIRMED"
+	code, out = e.refund(10001)
+	wantError(t, code, out, http.StatusBadRequest, adapter.CodeBadRequest)
+
+	e.fake.cancelBlocked = "Insufficient funds"
+	code, out = e.refund(10000)
+	wantError(t, code, out, http.StatusUnprocessableEntity, "platega_cancel_unsupported")
+	if msg, _ := out["message"].(string); !strings.Contains(msg, "Insufficient funds") {
+		t.Fatalf("the reason is lost: %v", out)
+	}
+	if e.cancels() != 0 {
+		t.Fatalf("cancelled without Platega's yes: %v", e.fake.paths)
+	}
+
+	e.fake.cancelBlocked, e.fake.cancelManual = "", true
+	code, out = e.refund(10000)
+	wantError(t, code, out, http.StatusUnprocessableEntity, "platega_refund_manual")
+
+	code, out = e.call(http.MethodPost, "/v1/refund", map[string]any{"settings": settings(), "external_id": "../etc", "amount": 100})
+	wantError(t, code, out, http.StatusBadRequest, adapter.CodeBadRequest)
 }
