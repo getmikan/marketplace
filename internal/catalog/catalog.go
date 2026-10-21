@@ -3,9 +3,11 @@
 // one directory each: payments/ for the payment methods (protocol 1, PROTOCOL.md), tools/
 // for the rest (protocol 2, PROTOCOL-v2.md).
 //
-// index.json is signed like the panel's release manifest: .sig holds
-// base64(ed25519.Sign(key, the file's exact bytes)), and the panel and the host trust it
-// only with the release key whose public half is PublicKey.
+// index.json is signed with the catalog's own key in the catalog's context: index.json.sig2
+// holds base64(ed25519.Sign(key, Context + the file's exact bytes)), and the panel and the host
+// trust it only with the key whose public half is PublicKey. index.json.sig, the release key's
+// signature over the bytes alone (LegacyKey), is published too while panels before 0.5.1.1,
+// which read only it, are out there.
 package catalog
 
 import (
@@ -23,9 +25,21 @@ import (
 	"time"
 )
 
-// PublicKey is the public half of the mikan release key (raw Ed25519, base64): the same
-// key the panel and the host verify the catalog with.
-const PublicKey = "Z3wSIPBSaJxh5CsGO8eINI0aM0kyrQ46EcJSNeH85W8="
+// PublicKey is the public half of the catalog's key (raw Ed25519, base64): the same key as
+// mikan's internal/release.CatalogKey, which the panel and the host verify the catalog with.
+const PublicKey = "Z4QfL07dI/IRReSe6Gr76UcxxPoy4i2GiClBv8RcNuo="
+
+// LegacyKey is the public half of the mikan release key, which signed the catalog for the
+// panels before 0.5.1.1 (index.json.sig).
+const LegacyKey = "Z3wSIPBSaJxh5CsGO8eINI0aM0kyrQ46EcJSNeH85W8="
+
+// Context is what a catalog's signature covers before the file's bytes (mikan's
+// internal/release.CatalogContext): a signature made for another kind of document never
+// passes for the catalog.
+const Context = "mikan catalog v1\n"
+
+// SigSuffix names the signature in a context next to its file (index.json.sig2).
+const SigSuffix = ".sig2"
 
 // Format is the index.json format version ("version" in the file).
 const Format = 1
@@ -267,8 +281,35 @@ func Sign(data []byte, key ed25519.PrivateKey) string {
 	return base64.StdEncoding.EncodeToString(ed25519.Sign(key, data))
 }
 
-// Verify checks the signature over the exact bytes of index.json, then decodes and
-// checks the index.
+// SignIn returns the signature of data in context, the contents of a .sig2.
+func SignIn(context string, data []byte, key ed25519.PrivateKey) string {
+	return Sign(append([]byte(context), data...), key)
+}
+
+// VerifyIn checks a signature made in context over data by pub.
+func VerifyIn(context string, data []byte, sig string, pub ed25519.PublicKey) error {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sig))
+	if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, append([]byte(context), data...), raw) {
+		return ErrSignature
+	}
+	return nil
+}
+
+// Open checks the catalog's signature (index.json.sig2) over the exact bytes of index.json in
+// the catalog's context, then decodes and checks the index.
+func Open(data []byte, sig string, pub ed25519.PublicKey) (Index, error) {
+	if err := VerifyIn(Context, data, sig, pub); err != nil {
+		return Index{}, err
+	}
+	var idx Index
+	if err := decodeStrict(data, &idx); err != nil {
+		return idx, fmt.Errorf("catalog: %w", err)
+	}
+	return idx, idx.Check()
+}
+
+// Verify checks the release key's signature over the exact bytes of index.json (index.json.sig,
+// LegacyKey), then decodes and checks the index.
 func Verify(data []byte, sig string, pub ed25519.PublicKey) (Index, error) {
 	var idx Index
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sig))

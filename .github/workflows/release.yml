@@ -21,6 +21,7 @@ jobs:
     outputs:
       adapters: ${{ steps.plan.outputs.adapters }}
       changed: ${{ steps.plan.outputs.changed }}
+      resign: ${{ steps.plan.outputs.resign }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -40,13 +41,17 @@ jobs:
           base="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
           test -n "$base"
           mkdir previous
-          gh release download "$base" --repo "$GITHUB_REPOSITORY" \
-            --pattern index.json --pattern index.json.sig --dir previous
+          # index.json with its signatures: .sig2 by the catalog's key, and .sig by the release
+          # key (a catalog from before the catalog's key has only that one).
+          gh release download "$base" --repo "$GITHUB_REPOSITORY" --pattern 'index.json*' --dir previous
           go run ./cmd/index plan -previous previous/index.json -base "$base" -out plan.json > /dev/null
       - id: plan
         run: |
           echo "adapters=$(jq -c .build plan.json)" >> "$GITHUB_OUTPUT"
           echo "changed=$(jq '.build | length > 0' plan.json)" >> "$GITHUB_OUTPUT"
+          # A catalog from before the catalog's key has no index.json.sig2: it is published once
+          # again, signed so, though no adapter changed (mikan 0.5.1.1 reads only that one).
+          if [ -f previous/index.json.sig2 ]; then echo "resign=false"; else echo "resign=true"; fi >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: release-plan
@@ -117,7 +122,10 @@ jobs:
 
   publish:
     needs: [test, image]
-    if: always() && needs.test.result == 'success' && needs.test.outputs.changed == 'true' && needs.image.result == 'success'
+    if: >-
+      always() && needs.test.result == 'success' &&
+      (needs.test.outputs.changed == 'true' && needs.image.result == 'success' ||
+       needs.test.outputs.changed != 'true' && needs.test.outputs.resign == 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -130,19 +138,26 @@ jobs:
         with:
           name: release-plan
       - uses: actions/download-artifact@v4
+        if: needs.test.outputs.changed == 'true'
         with:
           path: digests
           pattern: digest-*
           merge-multiple: true
       - name: Build and verify signed catalog
         env:
+          # The catalog's own key signs index.json.sig2. The release key signs index.json.sig
+          # for the panels before mikan 0.5.1.1 until this secret is removed.
+          MARKETPLACE_CATALOG_KEY: ${{ secrets.MARKETPLACE_CATALOG_KEY }}
           MARKETPLACE_SIGNING_KEY: ${{ secrets.MARKETPLACE_SIGNING_KEY }}
         run: |
           args=()
-          for f in digests/*; do
-            test -f "$f"
-            args+=(-digest "$(basename "$f")=$(cat "$f")")
-          done
+          # Nothing was built when only the signature is new: every digest comes from the plan.
+          if [ -d digests ]; then
+            for f in digests/*; do
+              test -f "$f"
+              args+=(-digest "$(basename "$f")=$(cat "$f")")
+            done
+          fi
           go run ./cmd/index build -plan plan.json "${args[@]}" -out dist
           go run ./cmd/index verify dist/index.json
       - name: Publish catalog
@@ -150,6 +165,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="catalog-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          files=(dist/index.json dist/index.json.sig2)
+          if [ -f dist/index.json.sig ]; then files+=(dist/index.json.sig); fi
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Catalog $tag" --latest --generate-notes \
-            dist/index.json dist/index.json.sig
+            "${files[@]}"

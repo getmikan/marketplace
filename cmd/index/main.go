@@ -5,12 +5,14 @@
 //	    adapters as a JSON array of {"id", "version", "dir", "image"}
 //	index plan -previous previous/index.json -base v1.0.3 -out plan.json
 //	    selects changed adapters and reuses signed digests for the others
-//	MARKETPLACE_SIGNING_KEY="$(cat key.pem)" index build \
+//	MARKETPLACE_CATALOG_KEY="$(cat catalog.pem)" [MARKETPLACE_SIGNING_KEY="$(cat release.pem)"] index build \
 //	    -digest yookassa=sha256:… -digest cryptobot=sha256:… -digest platega=sha256:… -digest rollypay=sha256:… \
 //	    -digest cardlink=sha256:… -out dist
-//	    writes dist/index.json and dist/index.json.sig
+//	    writes dist/index.json and dist/index.json.sig2 (the catalog's key, in its context), and
+//	    dist/index.json.sig (the release key, for panels before 0.5.1.1) when that key is given
 //	index verify dist/index.json
-//	    checks dist/index.json.sig with the release public key (or -key)
+//	    checks dist/index.json.sig2 with the catalog's public key (or -key), and
+//	    dist/index.json.sig with the release key's (or -legacy-key) when it is there
 package main
 
 import (
@@ -142,14 +144,17 @@ func plan(args []string, out io.Writer) error {
 	previous := fs.String("previous", "", "previous signed index.json")
 	base := fs.String("base", "", "Git tag of the previous release")
 	outFile := fs.String("out", "plan.json", "release plan output")
-	pubB64 := fs.String("key", catalog.PublicKey, "public key, raw Ed25519 in base64")
+	pubB64 := fs.String("key", catalog.PublicKey, "the catalog's public key, raw Ed25519 in base64")
+	legacyB64 := fs.String("legacy-key", catalog.LegacyKey, "the release key that signed catalogs before index.json.sig2, raw Ed25519 in base64")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *previous == "" || *base == "" {
 		return errors.New("-previous and -base are required")
 	}
-	prev, err := readCatalog(*previous, *pubB64)
+	// The previous catalog may be one from before the catalog's key: signed by the release
+	// key alone.
+	prev, err := readCatalog(*previous, *pubB64, *legacyB64)
 	if err != nil {
 		return fmt.Errorf("previous catalog: %w", err)
 	}
@@ -430,9 +435,17 @@ func build(args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	key, err := catalog.PrivateKey(os.Getenv("MARKETPLACE_SIGNING_KEY"))
+	key, err := catalog.PrivateKey(os.Getenv("MARKETPLACE_CATALOG_KEY"))
 	if err != nil {
-		return fmt.Errorf("MARKETPLACE_SIGNING_KEY: %w", err)
+		return fmt.Errorf("MARKETPLACE_CATALOG_KEY: %w", err)
+	}
+	// The release key's signature is for the panels before 0.5.1.1, which read only that one:
+	// made while the secret is still given.
+	var legacy ed25519.PrivateKey
+	if pemText := os.Getenv("MARKETPLACE_SIGNING_KEY"); pemText != "" {
+		if legacy, err = catalog.PrivateKey(pemText); err != nil {
+			return fmt.Errorf("MARKETPLACE_SIGNING_KEY: %w", err)
+		}
 	}
 	ms, err := manifests(*root)
 	if err != nil {
@@ -451,36 +464,56 @@ func build(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	sig := catalog.Sign(data, key)
+	sig := catalog.SignIn(catalog.Context, data, key)
 	// The file must pass the checks the panel and the host make.
-	if _, err := catalog.Verify(data, sig, key.Public().(ed25519.PublicKey)); err != nil {
+	if _, err := catalog.Open(data, sig, key.Public().(ed25519.PublicKey)); err != nil {
 		return err
+	}
+	files := map[string][]byte{"index.json": data, "index.json" + catalog.SigSuffix: []byte(sig + "\n")}
+	if legacy != nil {
+		files["index.json.sig"] = []byte(catalog.Sign(data, legacy) + "\n")
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(*outDir, "index.json"), data, 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(*outDir, "index.json.sig"), []byte(sig+"\n"), 0o644); err != nil {
-		return err
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(*outDir, name), content, 0o644); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(out, "index: %d adapters\n", len(idx.Adapters))
 	return nil
 }
 
-// readCatalog reads index.json and index.json.sig next to it, and verifies them with the
-// public key (raw Ed25519 in base64).
-func readCatalog(file, pubB64 string) (catalog.Index, error) {
+// readCatalog reads index.json and its signature next to it (raw Ed25519 public keys in
+// base64): index.json.sig2 by the catalog's key; with legacyB64 given and no .sig2 there,
+// index.json.sig by the release key, as catalogs were signed before.
+func readCatalog(file, pubB64, legacyB64 string) (catalog.Index, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return catalog.Index{}, err
 	}
-	sig, err := os.ReadFile(file + ".sig")
+	sig, err := os.ReadFile(file + catalog.SigSuffix)
+	if errors.Is(err, os.ErrNotExist) && legacyB64 != "" {
+		return readLegacy(file, data, legacyB64)
+	}
 	if err != nil {
 		return catalog.Index{}, err
 	}
 	pub, err := catalog.Key(pubB64)
+	if err != nil {
+		return catalog.Index{}, err
+	}
+	return catalog.Open(data, string(sig), pub)
+}
+
+// readLegacy checks index.json.sig, the release key's signature over data, the file's bytes.
+func readLegacy(file string, data []byte, legacyB64 string) (catalog.Index, error) {
+	sig, err := os.ReadFile(file + ".sig")
+	if err != nil {
+		return catalog.Index{}, err
+	}
+	pub, err := catalog.Key(legacyB64)
 	if err != nil {
 		return catalog.Index{}, err
 	}
@@ -489,16 +522,26 @@ func readCatalog(file, pubB64 string) (catalog.Index, error) {
 
 func verify(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	pubB64 := fs.String("key", catalog.PublicKey, "public key, raw Ed25519 in base64")
+	pubB64 := fs.String("key", catalog.PublicKey, "the catalog's public key, raw Ed25519 in base64")
+	legacyB64 := fs.String("legacy-key", catalog.LegacyKey, "the release key, raw Ed25519 in base64, for index.json.sig")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: index verify [-key base64] dist/index.json")
+		return errors.New("usage: index verify [-key base64] [-legacy-key base64] dist/index.json")
 	}
-	idx, err := readCatalog(fs.Arg(0), *pubB64)
+	idx, err := readCatalog(fs.Arg(0), *pubB64, "")
 	if err != nil {
 		return err
+	}
+	// The release key's signature, when it was made, must hold too: the panels before 0.5.1.1
+	// read only that one.
+	if data, err := os.ReadFile(fs.Arg(0)); err == nil {
+		if _, err := os.Stat(fs.Arg(0) + ".sig"); err == nil {
+			if _, err := readLegacy(fs.Arg(0), data, *legacyB64); err != nil {
+				return fmt.Errorf("index.json.sig: %w", err)
+			}
+		}
 	}
 	for _, e := range idx.Adapters {
 		fmt.Fprintf(out, "ok: %s %s %s %s@%s\n", e.Category, e.ID, e.Version, e.Image, e.Digest)

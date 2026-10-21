@@ -442,18 +442,47 @@ func Build(addons []Addon, revoked []Revoked, official []string, updated time.Ti
 	return idx, idx.Check(official)
 }
 
-// Sign is the base64 Ed25519 signature of the file, the contents of index.json.sig.
+// PublicKey is the public half of the registry's key (raw Ed25519, base64): the same key as
+// mikan's internal/release.CommunityKey, which the panel verifies the index with.
+const PublicKey = "BKCw8Uf/qo3xSrYL+jwWyEThn/PXxHh0FiJvLDowmdc="
+
+// Context is what the index's signature covers before the file's bytes (mikan's
+// internal/release.CommunityContext).
+const Context = "mikan community v1\n"
+
+// Sign is the base64 Ed25519 signature of the file, the contents of index.json.sig: the release
+// key's, for the panels before 0.5.1.1.
 func Sign(data []byte, key ed25519.PrivateKey) string { return catalog.Sign(data, key) }
+
+// SignIn is the registry's signature of the file in its context, the contents of
+// index.json.sig2.
+func SignIn(data []byte, key ed25519.PrivateKey) string { return catalog.SignIn(Context, data, key) }
 
 var ErrIndexSignature = errors.New("community: bad signature")
 
-// Verify checks the signature over the exact bytes of index.json, then the index.
+// Verify checks the release key's signature over the exact bytes of index.json
+// (index.json.sig), then the index.
 func Verify(data []byte, sig string, pub ed25519.PublicKey, official []string) (Index, error) {
 	var idx Index
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sig))
 	if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, data, raw) {
 		return idx, ErrIndexSignature
 	}
+	return decodeIndex(data, official)
+}
+
+// Open checks the registry's signature (index.json.sig2) over the exact bytes of index.json in
+// its context, then the index.
+func Open(data []byte, sig string, pub ed25519.PublicKey, official []string) (Index, error) {
+	if catalog.VerifyIn(Context, data, sig, pub) != nil {
+		return Index{}, ErrIndexSignature
+	}
+	return decodeIndex(data, official)
+}
+
+// decodeIndex reads a signed index and checks it.
+func decodeIndex(data []byte, official []string) (Index, error) {
+	var idx Index
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&idx); err != nil {

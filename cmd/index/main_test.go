@@ -23,8 +23,16 @@ var (
 	digestB = "sha256:" + strings.Repeat("b", 64)
 )
 
-// throwawayKey sets MARKETPLACE_SIGNING_KEY to a fresh key and returns its public half.
+// throwawayKey sets MARKETPLACE_CATALOG_KEY to a fresh key, with no release key
+// (MARKETPLACE_SIGNING_KEY), and returns its public half.
 func throwawayKey(t *testing.T) string {
+	t.Helper()
+	t.Setenv("MARKETPLACE_SIGNING_KEY", "")
+	return keyIn(t, "MARKETPLACE_CATALOG_KEY")
+}
+
+// keyIn sets the variable to a fresh key and returns its public half.
+func keyIn(t *testing.T, name string) string {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -34,7 +42,7 @@ func throwawayKey(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MARKETPLACE_SIGNING_KEY", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
+	t.Setenv(name, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
 	return base64.StdEncoding.EncodeToString(pub)
 }
 
@@ -125,15 +133,22 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 		t.Fatalf("verify: %s", got)
 	}
 
-	// The signature is base64(ed25519.Sign(key, exact bytes)), as the panel checks it.
+	// The signature is base64(ed25519.Sign(key, the catalog's context + the exact bytes)) in
+	// index.json.sig2, as the panel checks it; without the release key there is no .sig.
 	data, _ := os.ReadFile(file)
-	sig, _ := os.ReadFile(file + ".sig")
+	sig, _ := os.ReadFile(file + catalog.SigSuffix)
 	key, _ := catalog.Key(pub)
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
-	if err != nil || !ed25519.Verify(key, data, raw) {
-		t.Fatal("the signature does not verify over the file's bytes")
+	if err != nil || !ed25519.Verify(key, append([]byte(catalog.Context), data...), raw) {
+		t.Fatal("the signature does not verify over the context and the file's bytes")
 	}
-	idx, err := catalog.Verify(data, string(sig), key)
+	if ed25519.Verify(key, data, raw) {
+		t.Fatal("the signature holds over the bytes alone")
+	}
+	if _, err := os.Stat(file + ".sig"); err == nil {
+		t.Fatal("index.json.sig without the release key")
+	}
+	idx, err := catalog.Open(data, string(sig), key)
 	if err != nil || idx.Version != 1 || len(idx.Adapters) != 6 || idx.Adapters[5].Digest != digestA || idx.Adapters[5].MinPanel != "0.4.3" ||
 		idx.Adapters[5].Category != "payments" || !bytes.Contains(data, []byte(`"category": "payments"`)) {
 		t.Fatalf("index: %v %+v", err, idx)
@@ -150,6 +165,37 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	runFails(t, "bad signature", "verify", "-key", pub, file)
 }
 
+// While MARKETPLACE_SIGNING_KEY is given, the release key's index.json.sig is made too, over
+// the bytes alone as the panels before 0.5.1.1 read it, and verify checks it with the
+// release key's public half; a catalog with only that signature still reads as a previous one.
+func TestLegacySignature(t *testing.T) {
+	pub := throwawayKey(t)
+	legacy := keyIn(t, "MARKETPLACE_SIGNING_KEY")
+	out := t.TempDir()
+	runOK(t, append([]string{"build", "-root", "../..", "-out", out}, digestFlags...)...)
+	file := filepath.Join(out, "index.json")
+	data, _ := os.ReadFile(file)
+	sig, err := os.ReadFile(file + ".sig")
+	if err != nil {
+		t.Fatal("no index.json.sig with the release key given")
+	}
+	key, _ := catalog.Key(legacy)
+	if _, err := catalog.Verify(data, string(sig), key); err != nil {
+		t.Fatalf("index.json.sig: %v", err)
+	}
+	runOK(t, "verify", "-key", pub, "-legacy-key", legacy, file)
+	runFails(t, "index.json.sig", "verify", "-key", pub, file)
+	if err := os.Remove(file + catalog.SigSuffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCatalog(file, pub, legacy); err != nil {
+		t.Fatalf("a catalog from before the catalog's key: %v", err)
+	}
+	if _, err := readCatalog(file, pub, ""); err == nil {
+		t.Fatal("a catalog without index.json.sig2 read without the release key")
+	}
+}
+
 func TestBuildRefuses(t *testing.T) {
 	throwawayKey(t)
 	out := t.TempDir()
@@ -158,8 +204,8 @@ func TestBuildRefuses(t *testing.T) {
 	runFails(t, "does not exist", append(slices.Concat(base, digestFlags), "-digest", "stripe="+digestA)...)
 	runFails(t, "two digests", append(base, "-digest", "yookassa="+digestA, "-digest", "yookassa="+digestB)...)
 	runFails(t, "digest", append(slices.Concat(base, digestFlags[2:]), "-digest", "yookassa=sha256:abc")...)
-	t.Setenv("MARKETPLACE_SIGNING_KEY", "")
-	runFails(t, "MARKETPLACE_SIGNING_KEY", slices.Concat(base, digestFlags)...)
+	t.Setenv("MARKETPLACE_CATALOG_KEY", "")
+	runFails(t, "MARKETPLACE_CATALOG_KEY", slices.Concat(base, digestFlags)...)
 	if _, err := os.Stat(filepath.Join(out, "index.json")); err == nil {
 		t.Fatal("a refused build wrote index.json")
 	}
