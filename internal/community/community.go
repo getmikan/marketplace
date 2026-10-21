@@ -92,10 +92,14 @@ type Prior struct {
 // release signed otherwise waits for a review.
 type Addon struct {
 	Entry
-	Repo      string `json:"repo"`
-	RepoID    int64  `json:"repo_id"`
-	Key       string `json:"key,omitempty"`
-	Stars     int    `json:"stars"`
+	Repo   string `json:"repo"`
+	RepoID int64  `json:"repo_id"`
+	Key    string `json:"key,omitempty"`
+	Stars  int    `json:"stars"`
+	// Downloads is how many times the image was pulled, as the page of its GitHub package
+	// counts it, to two significant digits (RoundCount): no telemetry of panels, and no
+	// commit with every pull. 0 for an image elsewhere.
+	Downloads int    `json:"downloads,omitempty"`
 	Previous  *Prior `json:"previous,omitempty"`
 	AddedAt   int64  `json:"added_at"`
 	UpdatedAt int64  `json:"updated_at"`

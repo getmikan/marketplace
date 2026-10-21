@@ -36,6 +36,30 @@ type Read struct {
 	Repo *Repo // nil: the repository is gone (404)
 	Doc  Doc
 	Err  error // the release could not be read or used: nothing changes for it
+	// Downloads are the pulls of the images of Doc, by image; an image missing from it could
+	// not be counted this run and keeps the count it had.
+	Downloads map[string]int
+}
+
+// RoundCount keeps two significant digits of a count of 100 or more: 12757 is 13000. A
+// snapshot changes when the count does in a way a reader sees.
+func RoundCount(n int) int {
+	if n < 100 {
+		return n
+	}
+	p := 1
+	for n/p >= 100 {
+		p *= 10
+	}
+	return (n + p/2) / p * p
+}
+
+// downloads is the count of e's image this run, or before when it could not be counted.
+func (rd Read) downloads(e Entry, before int) int {
+	if n, ok := rd.Downloads[e.Image]; ok {
+		return RoundCount(n)
+	}
+	return before
 }
 
 // State is the registry as the indexer starts from it.
@@ -143,6 +167,7 @@ func MakePlan(st State, known, found map[int64]Read, now int64) Plan {
 				continue
 			}
 			next := advance(a, e, r, rd.Doc.Key, now)
+			next.Downloads = rd.downloads(e, a.Downloads)
 			wider := wide(e.Permissions, a.Permissions)
 			if len(wider) > 0 {
 				why = append(why, fmt.Sprintf("`%s` now asks for **%s**", a.ID, strings.Join(wider, ", ")))
@@ -173,6 +198,7 @@ func MakePlan(st State, known, found map[int64]Read, now int64) Plan {
 				continue
 			}
 			a := snapshot(entries[eid], r, rd.Doc.Key, now)
+			a.Downloads = rd.downloads(a.Entry, 0)
 			fresh = append(fresh, a)
 			taken[eid] = id
 			review.Files[a.Path()] = Encode(a)
@@ -210,6 +236,7 @@ func MakePlan(st State, known, found map[int64]Read, now int64) Plan {
 				continue
 			}
 			a := snapshot(e, r, rd.Doc.Key, now)
+			a.Downloads = rd.downloads(e, 0)
 			fresh = append(fresh, a)
 			taken[e.ID] = id
 			review.Files[a.Path()] = Encode(a)

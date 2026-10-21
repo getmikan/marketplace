@@ -113,6 +113,7 @@ type source interface {
 	Search(ctx context.Context, topic string) ([]community.Repo, error)
 	RepoByID(ctx context.Context, id int64) (*community.Repo, error)
 	Release(ctx context.Context, fullName string) (file, sig []byte, err error)
+	Downloads(ctx context.Context, fullName, image string) (int, error)
 	OpenBranches(ctx context.Context) ([]string, error)
 	CommitMain(ctx context.Context, base, message string, files community.Change) (string, error)
 	OpenReview(ctx context.Context, base string, r community.Review) error
@@ -159,6 +160,20 @@ func sync(ctx context.Context, gh source, root, base string, official []string, 
 		if err != nil {
 			rd.Err = err
 			fmt.Fprintf(out, "skip %s: %v\n", r.FullName, err)
+			return rd
+		}
+		// A count that cannot be had this run is left out: the snapshot keeps the one it had.
+		rd.Downloads = map[string]int{}
+		for _, e := range rd.Doc.Entries {
+			if _, done := rd.Downloads[e.Image]; done {
+				continue
+			}
+			n, err := gh.Downloads(ctx, r.FullName, e.Image)
+			if err != nil {
+				fmt.Fprintf(out, "downloads of %s: %v\n", e.Image, err)
+				continue
+			}
+			rd.Downloads[e.Image] = n
 		}
 		return rd
 	}
