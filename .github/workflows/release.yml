@@ -21,6 +21,7 @@ jobs:
     outputs:
       adapters: ${{ steps.plan.outputs.adapters }}
       changed: ${{ steps.plan.outputs.changed }}
+      resign: ${{ steps.plan.outputs.resign }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -48,6 +49,9 @@ jobs:
         run: |
           echo "adapters=$(jq -c .build plan.json)" >> "$GITHUB_OUTPUT"
           echo "changed=$(jq '.build | length > 0' plan.json)" >> "$GITHUB_OUTPUT"
+          # A catalog from before the catalog's key has no index.json.sig2: it is published once
+          # again, signed so, though no adapter changed (mikan 0.5.1.1 reads only that one).
+          if [ -f previous/index.json.sig2 ]; then echo "resign=false"; else echo "resign=true"; fi >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: release-plan
@@ -118,7 +122,10 @@ jobs:
 
   publish:
     needs: [test, image]
-    if: always() && needs.test.result == 'success' && needs.test.outputs.changed == 'true' && needs.image.result == 'success'
+    if: >-
+      always() && needs.test.result == 'success' &&
+      (needs.test.outputs.changed == 'true' && needs.image.result == 'success' ||
+       needs.test.outputs.changed != 'true' && needs.test.outputs.resign == 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -131,6 +138,7 @@ jobs:
         with:
           name: release-plan
       - uses: actions/download-artifact@v4
+        if: needs.test.outputs.changed == 'true'
         with:
           path: digests
           pattern: digest-*
@@ -143,10 +151,13 @@ jobs:
           MARKETPLACE_SIGNING_KEY: ${{ secrets.MARKETPLACE_SIGNING_KEY }}
         run: |
           args=()
-          for f in digests/*; do
-            test -f "$f"
-            args+=(-digest "$(basename "$f")=$(cat "$f")")
-          done
+          # Nothing was built when only the signature is new: every digest comes from the plan.
+          if [ -d digests ]; then
+            for f in digests/*; do
+              test -f "$f"
+              args+=(-digest "$(basename "$f")=$(cat "$f")")
+            done
+          fi
           go run ./cmd/index build -plan plan.json "${args[@]}" -out dist
           go run ./cmd/index verify dist/index.json
       - name: Publish catalog
