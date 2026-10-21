@@ -6,10 +6,12 @@
 //	    topic, commits what may go in by itself to main and opens a pull request for the rest
 //	community check -root registry
 //	    checks every snapshot and revoked.json
-//	MARKETPLACE_SIGNING_KEY="$(cat key.pem)" community build -root registry -out dist
-//	    writes dist/index.json and dist/index.json.sig
+//	MARKETPLACE_COMMUNITY_KEY="$(cat community.pem)" [MARKETPLACE_SIGNING_KEY="$(cat release.pem)"] community build -root registry -out dist
+//	    writes dist/index.json and dist/index.json.sig2 (the registry's key, in its context), and
+//	    dist/index.json.sig (the release key, for panels before 0.5.1.1) when that key is given
 //	community verify dist/index.json
-//	    checks dist/index.json.sig with the release public key (or -key)
+//	    checks dist/index.json.sig2 with the registry's public key (or -key), and
+//	    dist/index.json.sig with the release key's (or -legacy-key) when it is there
 //	community same new/index.json old/index.json
 //	    prints "same" when the two list the same addons and revocations, else "changed"
 package main
@@ -63,27 +65,41 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
-// officialIDs is the ids of the signed catalog, read from a file (and its .sig) or the URL.
+// officialIDs is the ids of the signed catalog, read from a file (and its signature next to it)
+// or the URL: by the catalog's key (index.json.sig2), or, for a catalog from before that key,
+// by the release key (index.json.sig).
 func officialIDs(ctx context.Context, src string) ([]string, error) {
-	var data, sig []byte
-	var err error
-	if strings.HasPrefix(src, "https://") {
-		if data, err = fetch(ctx, src, 1<<20); err == nil {
-			sig, err = fetch(ctx, src+".sig", 4096)
+	read := func(name string, limit int64) ([]byte, error) {
+		if strings.HasPrefix(src, "https://") {
+			return fetch(ctx, name, limit)
 		}
-	} else if data, err = os.ReadFile(src); err == nil {
-		sig, err = os.ReadFile(src + ".sig")
+		return os.ReadFile(name)
 	}
+	data, err := read(src, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	pub, err := catalog.Key(catalog.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-	idx, err := catalog.Verify(data, string(sig), pub)
-	if err != nil {
-		return nil, err
+	var idx catalog.Index
+	if sig, err := read(src+catalog.SigSuffix, 4096); err == nil {
+		pub, err := catalog.Key(catalog.PublicKey)
+		if err != nil {
+			return nil, err
+		}
+		if idx, err = catalog.Open(data, string(sig), pub); err != nil {
+			return nil, err
+		}
+	} else {
+		sig, err := read(src+".sig", 4096)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		pub, err := catalog.Key(catalog.LegacyKey)
+		if err != nil {
+			return nil, err
+		}
+		if idx, err = catalog.Verify(data, string(sig), pub); err != nil {
+			return nil, err
+		}
 	}
 	ids := make([]string, len(idx.Adapters))
 	for i, e := range idx.Adapters {
@@ -279,9 +295,17 @@ func build(ctx context.Context, args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	key, err := catalog.PrivateKey(os.Getenv("MARKETPLACE_SIGNING_KEY"))
+	key, err := catalog.PrivateKey(os.Getenv("MARKETPLACE_COMMUNITY_KEY"))
 	if err != nil {
-		return fmt.Errorf("MARKETPLACE_SIGNING_KEY: %w", err)
+		return fmt.Errorf("MARKETPLACE_COMMUNITY_KEY: %w", err)
+	}
+	// The release key's signature is for the panels before 0.5.1.1, which read only that one:
+	// made while the secret is still given.
+	var legacy ed25519.PrivateKey
+	if pemText := os.Getenv("MARKETPLACE_SIGNING_KEY"); pemText != "" {
+		if legacy, err = catalog.PrivateKey(pemText); err != nil {
+			return fmt.Errorf("MARKETPLACE_SIGNING_KEY: %w", err)
+		}
 	}
 	idx, err := buildIndex(ctx, *root, *cat)
 	if err != nil {
@@ -291,19 +315,22 @@ func build(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	sig := community.Sign(data, key)
+	sig := community.SignIn(data, key)
 	// The file must pass the checks a panel makes.
-	if _, err := community.Verify(data, sig, key.Public().(ed25519.PublicKey), nil); err != nil {
+	if _, err := community.Open(data, sig, key.Public().(ed25519.PublicKey), nil); err != nil {
 		return err
+	}
+	files := map[string][]byte{"index.json": data, "index.json" + catalog.SigSuffix: []byte(sig + "\n")}
+	if legacy != nil {
+		files["index.json.sig"] = []byte(community.Sign(data, legacy) + "\n")
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(*outDir, "index.json"), data, 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(*outDir, "index.json.sig"), []byte(sig+"\n"), 0o644); err != nil {
-		return err
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(*outDir, name), content, 0o644); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(out, "index: %d addons, %d revoked\n", len(idx.Addons), len(idx.Revoked))
 	return nil
@@ -311,18 +338,19 @@ func build(ctx context.Context, args []string, out io.Writer) error {
 
 func verify(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	pubB64 := fs.String("key", catalog.PublicKey, "public key, raw Ed25519 in base64")
+	pubB64 := fs.String("key", community.PublicKey, "the registry's public key, raw Ed25519 in base64")
+	legacyB64 := fs.String("legacy-key", catalog.LegacyKey, "the release key, raw Ed25519 in base64, for index.json.sig")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: community verify [-key base64] dist/index.json")
+		return errors.New("usage: community verify [-key base64] [-legacy-key base64] dist/index.json")
 	}
 	data, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	sig, err := os.ReadFile(fs.Arg(0) + ".sig")
+	sig, err := os.ReadFile(fs.Arg(0) + catalog.SigSuffix)
 	if err != nil {
 		return err
 	}
@@ -330,9 +358,20 @@ func verify(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	idx, err := community.Verify(data, string(sig), pub, nil)
+	idx, err := community.Open(data, string(sig), pub, nil)
 	if err != nil {
 		return err
+	}
+	// The release key's signature, when it was made, must hold too: the panels before 0.5.1.1
+	// read only that one.
+	if legacySig, err := os.ReadFile(fs.Arg(0) + ".sig"); err == nil {
+		legacy, err := catalog.Key(*legacyB64)
+		if err != nil {
+			return err
+		}
+		if _, err := community.Verify(data, string(legacySig), legacy, nil); err != nil {
+			return fmt.Errorf("index.json.sig: %w", err)
+		}
 	}
 	for _, a := range idx.Addons {
 		fmt.Fprintf(out, "ok: %s %s %s %s@%s\n", a.ID, a.Version, a.Repo, a.Image, a.Digest)

@@ -40,8 +40,9 @@ jobs:
           base="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
           test -n "$base"
           mkdir previous
-          gh release download "$base" --repo "$GITHUB_REPOSITORY" \
-            --pattern index.json --pattern index.json.sig --dir previous
+          # index.json with its signatures: .sig2 by the catalog's key, and .sig by the release
+          # key (a catalog from before the catalog's key has only that one).
+          gh release download "$base" --repo "$GITHUB_REPOSITORY" --pattern 'index.json*' --dir previous
           go run ./cmd/index plan -previous previous/index.json -base "$base" -out plan.json > /dev/null
       - id: plan
         run: |
@@ -136,6 +137,9 @@ jobs:
           merge-multiple: true
       - name: Build and verify signed catalog
         env:
+          # The catalog's own key signs index.json.sig2. The release key signs index.json.sig
+          # for the panels before mikan 0.5.1.1 until this secret is removed.
+          MARKETPLACE_CATALOG_KEY: ${{ secrets.MARKETPLACE_CATALOG_KEY }}
           MARKETPLACE_SIGNING_KEY: ${{ secrets.MARKETPLACE_SIGNING_KEY }}
         run: |
           args=()
@@ -150,6 +154,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="catalog-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          files=(dist/index.json dist/index.json.sig2)
+          if [ -f dist/index.json.sig ]; then files+=(dist/index.json.sig); fi
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Catalog $tag" --latest --generate-notes \
-            dist/index.json dist/index.json.sig
+            "${files[@]}"
