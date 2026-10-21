@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,16 +27,66 @@ var ErrNoRelease = errors.New("community: no release with mikan-addon.json or in
 
 // GitHub is the REST API the indexer needs, with the workflow's token. API is the base
 // (https://api.github.com; tests point it at a server of their own), Registry the registry's
-// repository, owner/name.
+// repository, owner/name. Web is the site (https://github.com): the count of pulls of a
+// package is on its page, the API has none.
 type GitHub struct {
 	API      string
+	Web      string
 	Token    string
 	Registry string
 	Client   *http.Client
 }
 
 func NewGitHub(token, registry string) *GitHub {
-	return &GitHub{API: "https://api.github.com", Token: token, Registry: registry, Client: &http.Client{Timeout: 30 * time.Second}}
+	return &GitHub{API: "https://api.github.com", Web: "https://github.com", Token: token, Registry: registry, Client: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// totalDownloads is the count on a package's page: "Total downloads" over the exact number
+// in a title, whatever the page shows it rounded as.
+var totalDownloads = regexp.MustCompile(`(?s)Total downloads</span>\s*<h3[^>]*title="(\d+)"`)
+
+// Downloads is how many times image was pulled: a package of GitHub's container registry
+// (ghcr.io/<owner>/<name>) of the owner of repository fullName, as the package's page under
+// the repository counts it. 0 for an image elsewhere, a package the repository does not show,
+// or a page that says nothing of it.
+func (g *GitHub) Downloads(ctx context.Context, fullName, image string) (int, error) {
+	path, ok := strings.CutPrefix(image, "ghcr.io/")
+	if !ok {
+		return 0, nil
+	}
+	owner, name, ok := strings.Cut(path, "/")
+	repoOwner, _, _ := strings.Cut(fullName, "/")
+	if !ok || !strings.EqualFold(owner, repoOwner) {
+		return 0, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.Web+"/"+fullName+"/pkgs/container/"+url.PathEscape(name), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, &apiError{Status: resp.StatusCode}
+	}
+	page, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return 0, err
+	}
+	m := totalDownloads.FindSubmatch(page)
+	if m == nil {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
 }
 
 // apiError is an answer of the API that is not a success.

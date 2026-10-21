@@ -154,3 +154,32 @@ func TestPlanRemovals(t *testing.T) {
 		t.Fatalf("unreadable: %+v", p.Commit)
 	}
 }
+
+// A count of pulls goes in with two significant digits: a change a reader would see is a
+// commit, one inside the rounding is none, and a run that could not count keeps the count.
+func TestPlanDownloads(t *testing.T) {
+	have := addon("hello", "github.com/Author/hello", 7, "a")
+	read := func(n map[string]int) map[int64]Read {
+		return map[int64]Read{7: {Repo: repo(7, "Author/hello"), Doc: doc("", have.Entry), Downloads: n}}
+	}
+	p := MakePlan(State{Addons: []Addon{have}}, read(map[string]int{have.Image: 12757}), nil, 900)
+	if len(p.Commit) != 1 || decode(t, p.Commit[have.Path()]).Downloads != 13000 {
+		t.Fatalf("the count goes in rounded: %+v", p.Commit)
+	}
+	have.Downloads = 13000
+	if p := MakePlan(State{Addons: []Addon{have}}, read(map[string]int{have.Image: 12801}), nil, 900); len(p.Commit) != 0 {
+		t.Fatalf("a change inside the rounding: %+v", p.Commit)
+	}
+	if p := MakePlan(State{Addons: []Addon{have}}, read(map[string]int{}), nil, 900); len(p.Commit) != 0 {
+		t.Fatalf("a run that could not count keeps the count: %+v", p.Commit)
+	}
+	p = MakePlan(State{}, nil, map[int64]Read{8: {Repo: repo(8, "Author/new"), Doc: doc("", addon("fresh", "", 0, "b").Entry), Downloads: map[string]int{have.Image: 42}}}, 900)
+	if len(p.Reviews) != 1 || decode(t, p.Reviews[0].Files["addons/author/fresh.json"]).Downloads != 42 {
+		t.Fatalf("a new addon comes with its count: %+v", p.Reviews)
+	}
+	for n, want := range map[int]int{0: 0, 99: 99, 100: 100, 1234: 1200, 1250: 1300, 12757: 13000, 999_999: 1_000_000} {
+		if got := RoundCount(n); got != want {
+			t.Errorf("RoundCount(%d) = %d, want %d", n, got, want)
+		}
+	}
+}

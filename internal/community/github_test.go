@@ -145,3 +145,39 @@ func TestGitHubWrites(t *testing.T) {
 		t.Fatalf("review: %v %+v", f.refs, f.prs)
 	}
 }
+
+// The count of pulls comes off the package's page under the repository: the exact number of
+// its title, for a ghcr.io image of the repository's owner only.
+func TestGitHubDownloads(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Author/hello/pkgs/container/hello":
+			_, _ = io.WriteString(w, `<div><span class="d-block color-fg-muted">Total downloads</span>
+<h3 title="12757">12.8K</h3></div>`)
+		case "/Author/hello/pkgs/container/blank":
+			_, _ = io.WriteString(w, `<html>no counts here</html>`)
+		case "/Author/hello/pkgs/container/broken":
+			http.Error(w, "down", http.StatusBadGateway)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(web.Close)
+	g := NewGitHub("tok", "getmikan/reg")
+	g.Web = web.URL
+	ctx := context.Background()
+	for image, want := range map[string]int{
+		"ghcr.io/author/hello":   12757, // owners are told apart without case, as GitHub does
+		"ghcr.io/author/blank":   0,
+		"ghcr.io/author/missing": 0,
+		"ghcr.io/other/hello":    0, // a package of someone else's is no count of this addon
+		"docker.io/author/hello": 0,
+	} {
+		if n, err := g.Downloads(ctx, "Author/hello", image); err != nil || n != want {
+			t.Errorf("%s: %d %v, want %d", image, n, err, want)
+		}
+	}
+	if _, err := g.Downloads(ctx, "Author/hello", "ghcr.io/author/broken"); err == nil {
+		t.Error("a page that fails is an error: the count stays as it was")
+	}
+}
