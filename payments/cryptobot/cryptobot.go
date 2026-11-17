@@ -37,7 +37,7 @@ func (cb *cryptoBot) Info() adapter.Info {
 		Version:      cb.manifest.Version,
 		Name:         cb.manifest.Name,
 		Currencies:   []string{"RUB", "USD", "EUR"},
-		Capabilities: []string{adapter.CapWebhook},
+		Capabilities: []string{adapter.CapWebhook, adapter.CapBrowserCheckout},
 		Settings: []adapter.Setting{
 			{Key: "token", Label: adapter.Text{"ru": "Токен API", "en": "API token"}, Type: "string", Secret: true, Required: true, Pattern: `^[!-~]{1,200}$`},
 			{Key: "testnet", Label: adapter.Text{"ru": "Тестовая сеть", "en": "Testnet"}, Type: "bool"},
@@ -60,6 +60,14 @@ type cbInvoice struct {
 	Amount  flexNumber `json:"amount"` // a string in the docs, a number in some answers
 	Payload string     `json:"payload"`
 	BotURL  string     `json:"bot_invoice_url"`
+	WebURL  string     `json:"web_app_invoice_url"`
+}
+
+func (i cbInvoice) paymentURL(browser bool) string {
+	if browser && i.WebURL != "" {
+		return i.WebURL
+	}
+	return i.BotURL
 }
 
 // client is one app token for one request; it is never kept.
@@ -148,7 +156,7 @@ func (cb *cryptoBot) Check(ctx context.Context, s adapter.Settings) error {
 // creating a second one.
 func (cb *cryptoBot) CreateInvoice(ctx context.Context, r adapter.InvoiceRequest) (adapter.Invoice, error) {
 	c := cb.client(r.Settings)
-	if inv, ok, err := c.findActive(ctx, r.IdempotencyKey); err != nil || ok {
+	if inv, ok, err := c.findActive(ctx, r.IdempotencyKey, r.BrowserCheckout); err != nil || ok {
 		return inv, err
 	}
 	body := map[string]any{
@@ -168,15 +176,16 @@ func (cb *cryptoBot) CreateInvoice(ctx context.Context, r adapter.InvoiceRequest
 	if err := c.call(ctx, "createInvoice", body, &inv); err != nil {
 		return adapter.Invoice{}, err
 	}
-	if inv.ID == 0 || inv.BotURL == "" {
+	payURL := inv.paymentURL(r.BrowserCheckout)
+	if inv.ID == 0 || payURL == "" {
 		return adapter.Invoice{}, adapter.ProviderUnavailable("CryptoBot gave no invoice link")
 	}
-	return adapter.Invoice{ExternalID: strconv.FormatInt(inv.ID, 10), PayURL: inv.BotURL}, nil
+	return adapter.Invoice{ExternalID: strconv.FormatInt(inv.ID, 10), PayURL: payURL}, nil
 }
 
 // findActive looks for an active invoice with this payload among the 100 latest: a
 // retried request finds the invoice the first attempt created.
-func (c client) findActive(ctx context.Context, payload string) (adapter.Invoice, bool, error) {
+func (c client) findActive(ctx context.Context, payload string, browser bool) (adapter.Invoice, bool, error) {
 	var res struct {
 		Items []cbInvoice `json:"items"`
 	}
@@ -184,8 +193,8 @@ func (c client) findActive(ctx context.Context, payload string) (adapter.Invoice
 		return adapter.Invoice{}, false, err
 	}
 	for _, inv := range res.Items {
-		if inv.Payload == payload && inv.ID != 0 && inv.BotURL != "" {
-			return adapter.Invoice{ExternalID: strconv.FormatInt(inv.ID, 10), PayURL: inv.BotURL}, true, nil
+		if payURL := inv.paymentURL(browser); inv.Payload == payload && inv.ID != 0 && payURL != "" {
+			return adapter.Invoice{ExternalID: strconv.FormatInt(inv.ID, 10), PayURL: payURL}, true, nil
 		}
 	}
 	return adapter.Invoice{}, false, nil

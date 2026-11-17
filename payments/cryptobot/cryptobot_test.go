@@ -51,7 +51,7 @@ func (f *fakeCryptoBot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.created = append(f.created, in)
 		f.n++
 		inv := &cbInvoice{ID: f.n, Status: "active", Fiat: in["fiat"].(string), Amount: flexNumber(in["amount"].(string)),
-			Payload: in["payload"].(string), BotURL: "https://t.me/CryptoBot?start=IV" + strconv.FormatInt(f.n, 10)}
+			Payload: in["payload"].(string), BotURL: "https://t.me/CryptoBot?start=IV" + strconv.FormatInt(f.n, 10), WebURL: "https://pay.example/web"}
 		f.invoices[inv.ID] = inv
 		res = inv
 	case "/getInvoices":
@@ -160,7 +160,7 @@ func TestInfo(t *testing.T) {
 	if code != http.StatusOK || out["id"] != "cryptobot" || out["protocol"] != 1.0 || out["version"] != manifestVersion(t) {
 		t.Fatalf("info: %d %v", code, out)
 	}
-	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook"]` {
+	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook","browser_checkout"]` {
 		t.Fatalf("capabilities: %s", got)
 	}
 	settings, _ := json.Marshal(out["settings"])
@@ -285,4 +285,18 @@ func TestWebhook(t *testing.T) {
 	junk := `[1,2]`
 	code, out := e.webhook(map[string][]string{"Crypto-Pay-Api-Signature": {sign(cbToken, []byte(junk))}}, junk)
 	wantError(t, code, out, http.StatusBadRequest, adapter.CodeBadRequest)
+}
+
+func TestBrowserInvoiceURL(t *testing.T) {
+	e := newEnv(t)
+	order := map[string]any{"settings": settings(), "payment_id": 42, "idempotency_key": "mikan-42",
+		"amount": 19900, "currency": "RUB", "return_url": "https://panel.example.com/shop", "browser_checkout": true}
+	for range 2 {
+		if code, out := e.call(http.MethodPost, "/v1/invoices", order); code != http.StatusOK || out["pay_url"] != "https://pay.example/web" {
+			t.Fatalf("browser invoice: %d %v", code, out)
+		}
+	}
+	if len(e.cb.created) != 1 {
+		t.Fatalf("created %d invoices for the same order", len(e.cb.created))
+	}
 }
