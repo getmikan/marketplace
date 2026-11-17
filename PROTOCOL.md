@@ -92,6 +92,7 @@ panel calls it before saving changed settings.
   "amount": 19900,
   "currency": "RUB",
   "description": "VPN · Месяц",
+  "receipt_email": "buyer@example.com",
   "return_url": "https://panel.example.com:2053/s9Hj.../tg",
   "webhook_url": "https://panel.example.com:2053/s9Hj.../pay/addon/yookassa/<token>"
 }
@@ -112,6 +113,10 @@ panel calls it before saving changed settings.
 - `webhook_url` is where the panel receives the provider's notifications. Providers that
   take a notification URL per invoice should send it; for the others (YooKassa, CryptoBot,
   Platega, RollyPay, Cardlink) the admin enters it in the provider's dashboard.
+- `receipt_email` is optional. Send it only to adapters advertising `receipt_email` in
+  `capabilities`, for delivery of the buyer’s receipt. Adapters must keep it out of logs.
+- `browser_checkout` is an optional boolean for adapters advertising `browser_checkout`.
+  When true, prefer a payment link the buyer can open directly in the browser.
 - An adapter may require `return_url` if its provider does (`bad_request` without it).
 
 ### `POST /v1/status`

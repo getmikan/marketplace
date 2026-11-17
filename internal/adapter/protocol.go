@@ -38,8 +38,10 @@ type Info struct {
 
 // Capabilities.
 const (
-	CapWebhook = "webhook"
-	CapRefund  = "refund"
+	CapWebhook         = "webhook"
+	CapRefund          = "refund"
+	CapReceiptEmail    = "receipt_email"
+	CapBrowserCheckout = "browser_checkout"
 )
 
 // Settings are the provider settings the panel sends with every request: a string or a
@@ -61,14 +63,16 @@ func (s Settings) Bool(key string) bool {
 
 // InvoiceRequest is the body of POST /v1/invoices.
 type InvoiceRequest struct {
-	Settings       Settings `json:"settings"`
-	PaymentID      int64    `json:"payment_id"`
-	IdempotencyKey string   `json:"idempotency_key"`
-	Amount         int64    `json:"amount"` // minor units
-	Currency       string   `json:"currency"`
-	Description    string   `json:"description"`
-	ReturnURL      string   `json:"return_url"`
-	WebhookURL     string   `json:"webhook_url"`
+	Settings        Settings `json:"settings"`
+	PaymentID       int64    `json:"payment_id"`
+	IdempotencyKey  string   `json:"idempotency_key"`
+	Amount          int64    `json:"amount"` // minor units
+	Currency        string   `json:"currency"`
+	Description     string   `json:"description"`
+	ReturnURL       string   `json:"return_url"`
+	ReceiptEmail    string   `json:"receipt_email,omitempty"`
+	BrowserCheckout bool     `json:"browser_checkout,omitempty"`
+	WebhookURL      string   `json:"webhook_url"`
 }
 
 // Invoice is the answer to POST /v1/invoices.

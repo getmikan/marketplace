@@ -9,6 +9,10 @@ Protocol: [PROTOCOL.md](../../PROTOCOL.md). Image: `ghcr.io/getmikan/adapter-yoo
 |---|---|---|
 | `shop_id` | digits | the YooKassa dashboard → Integration → API keys (shopId) |
 | `secret_key` | secret | the same page; a `test_…` key of a test shop works the same way |
+| `receipt_vat_code` | optional | [YooKassa VAT code](https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values) for the subscription service |
+
+With a VAT code configured and `receipt_email` supplied by the panel, the adapter includes
+receipt data for one subscription service in the payment request. YooKassa emails the receipt.
 
 Test shops use the same API with their test keys, so there is no separate test switch.
 
@@ -27,5 +31,4 @@ shows for this adapter and turn on `payment.succeeded` and `payment.canceled`.
 
 Errors: 401 → `bad_credentials`, 404 → `not_found`, 429 and 5xx → `provider_unavailable`,
 other refusals → `yookassa_<code>` with the field YooKassa names, e.g.
-`yookassa_invalid_request` with `parameter receipt` when the shop requires 54-FZ receipts
-(not supported yet).
+`yookassa_invalid_request` with `parameter receipt` when the shop requires receipts and received a payment request without receipt data.

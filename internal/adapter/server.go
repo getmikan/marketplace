@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"os"
@@ -367,6 +368,12 @@ func (s *server) checkInvoice(r InvoiceRequest) error {
 		return BadRequest("return_url must be an http(s) URL")
 	case !webURL(r.WebhookURL):
 		return BadRequest("webhook_url must be an http(s) URL")
+	}
+	if r.ReceiptEmail != "" {
+		addr, err := mail.ParseAddress(r.ReceiptEmail)
+		if !slices.Contains(s.info.Capabilities, CapReceiptEmail) || len(r.ReceiptEmail) > 254 || err != nil || addr.Address != r.ReceiptEmail {
+			return BadRequest("receipt_email is unsupported or invalid")
+		}
 	}
 	return nil
 }

@@ -33,10 +33,11 @@ func (y *yooKassa) Info() adapter.Info {
 		Version:      y.manifest.Version,
 		Name:         y.manifest.Name,
 		Currencies:   []string{"RUB"},
-		Capabilities: []string{adapter.CapWebhook, adapter.CapRefund},
+		Capabilities: []string{adapter.CapWebhook, adapter.CapRefund, adapter.CapReceiptEmail},
 		Settings: []adapter.Setting{
 			{Key: "shop_id", Label: adapter.Text{"ru": "shopId", "en": "Shop ID"}, Type: "string", Required: true, Pattern: `^[0-9]{1,20}$`},
 			{Key: "secret_key", Label: adapter.Text{"ru": "Секретный ключ", "en": "Secret key"}, Type: "string", Secret: true, Required: true, Pattern: `^[!-~]{1,200}$`},
+			{Key: "receipt_vat_code", Label: adapter.Text{"ru": "Код НДС для чеков с сайта", "en": "VAT code for website receipts"}, Type: "string", Pattern: `^[1-9][0-9]?$`},
 		},
 		Help: adapter.Text{
 			"ru": "shopId и секретный ключ — в личном кабинете ЮKassa → Интеграция → Ключи API. " +
@@ -161,6 +162,22 @@ func (y *yooKassa) CreateInvoice(ctx context.Context, r adapter.InvoiceRequest) 
 	}
 	if r.Description != "" {
 		body["description"] = adapter.Truncate(r.Description, 128)
+	}
+	if vat := r.Settings.String("receipt_vat_code"); vat != "" && r.ReceiptEmail != "" {
+		code, err := strconv.Atoi(vat)
+		if err != nil {
+			return adapter.Invoice{}, adapter.BadRequest("receipt_vat_code must be numeric")
+		}
+		description := r.Description
+		if description == "" {
+			description = "Subscription"
+		}
+		body["receipt"] = map[string]any{
+			"customer": map[string]string{"email": r.ReceiptEmail},
+			"items": []map[string]any{{"description": adapter.Truncate(description, 128),
+				"quantity": 1, "amount": body["amount"], "vat_code": code,
+				"payment_mode": "full_payment", "payment_subject": "service"}},
+		}
 	}
 	var p ykPayment
 	if err := y.client(r.Settings).do(ctx, http.MethodPost, "/payments", r.IdempotencyKey, body, &p); err != nil {
