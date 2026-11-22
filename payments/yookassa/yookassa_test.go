@@ -199,6 +199,14 @@ func TestCheck(t *testing.T) {
 	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
 	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": map[string]any{"shop_id": shopID}})
 	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
+	cfg := settings()
+	cfg["receipt_vat_code"] = "12"
+	if code, out := e.call(http.MethodPost, "/v1/check", map[string]any{"settings": cfg}); code != http.StatusOK {
+		t.Fatalf("valid VAT code: %d %v", code, out)
+	}
+	cfg["receipt_vat_code"] = "13"
+	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": cfg})
+	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
 }
 
 func TestCreateInvoice(t *testing.T) {

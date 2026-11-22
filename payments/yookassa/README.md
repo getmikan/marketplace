@@ -9,10 +9,13 @@ Protocol: [PROTOCOL.md](../../PROTOCOL.md). Image: `ghcr.io/getmikan/adapter-yoo
 |---|---|---|
 | `shop_id` | digits | the YooKassa dashboard → Integration → API keys (shopId) |
 | `secret_key` | secret | the same page; a `test_…` key of a test shop works the same way |
-| `receipt_vat_code` | optional | [YooKassa VAT code](https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values) for the subscription service |
+| `receipt_vat_code` | optional | [YooKassa VAT code](https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values) from 1 to 12 for the subscription service |
 
 With a VAT code configured and `receipt_email` supplied by the panel, the adapter includes
 receipt data for one subscription service in the payment request. YooKassa emails the receipt.
+The panel collects email only in the website checkout. If the YooKassa shop requires receipts,
+payments from the bot and Mini App fail because they do not supply an email. Use the website
+checkout and provide an email for both purchases and renewals with that shop.
 
 Test shops use the same API with their test keys, so there is no separate test switch.
 

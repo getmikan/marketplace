@@ -37,7 +37,7 @@ func (y *yooKassa) Info() adapter.Info {
 		Settings: []adapter.Setting{
 			{Key: "shop_id", Label: adapter.Text{"ru": "shopId", "en": "Shop ID"}, Type: "string", Required: true, Pattern: `^[0-9]{1,20}$`},
 			{Key: "secret_key", Label: adapter.Text{"ru": "Секретный ключ", "en": "Secret key"}, Type: "string", Secret: true, Required: true, Pattern: `^[!-~]{1,200}$`},
-			{Key: "receipt_vat_code", Label: adapter.Text{"ru": "Код НДС для чеков с сайта", "en": "VAT code for website receipts"}, Type: "string", Pattern: `^[1-9][0-9]?$`},
+			{Key: "receipt_vat_code", Label: adapter.Text{"ru": "Код НДС для чеков с сайта", "en": "VAT code for website receipts"}, Type: "string", Pattern: `^([1-9]|1[0-2])$`},
 		},
 		Help: adapter.Text{
 			"ru": "shopId и секретный ключ — в личном кабинете ЮKassa → Интеграция → Ключи API. " +

@@ -93,6 +93,7 @@ panel calls it before saving changed settings.
   "currency": "RUB",
   "description": "VPN · Месяц",
   "receipt_email": "buyer@example.com",
+  "browser_checkout": true,
   "return_url": "https://panel.example.com:2053/s9Hj.../tg",
   "webhook_url": "https://panel.example.com:2053/s9Hj.../pay/addon/yookassa/<token>"
 }
