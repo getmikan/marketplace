@@ -172,7 +172,7 @@ func TestInfo(t *testing.T) {
 	if code != http.StatusOK || out["id"] != "yookassa" || out["protocol"] != 1.0 || out["version"] != manifestVersion(t) {
 		t.Fatalf("info: %d %v", code, out)
 	}
-	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook","refund"]` {
+	if got, _ := json.Marshal(out["capabilities"]); string(got) != `["webhook","refund","receipt_email"]` {
 		t.Fatalf("capabilities: %s", got)
 	}
 	if got, _ := json.Marshal(out["currencies"]); string(got) != `["RUB"]` {
@@ -183,7 +183,7 @@ func TestInfo(t *testing.T) {
 		f := s.(map[string]any)
 		secret[f["key"].(string)] = f["secret"].(bool)
 	}
-	if len(secret) != 2 || secret["shop_id"] || !secret["secret_key"] {
+	if len(secret) != 3 || secret["shop_id"] || !secret["secret_key"] {
 		t.Fatalf("settings: %v", out["settings"])
 	}
 }
@@ -198,6 +198,14 @@ func TestCheck(t *testing.T) {
 	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": map[string]any{"shop_id": "shop", "secret_key": ykSecret}})
 	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
 	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": map[string]any{"shop_id": shopID}})
+	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
+	cfg := settings()
+	cfg["receipt_vat_code"] = "12"
+	if code, out := e.call(http.MethodPost, "/v1/check", map[string]any{"settings": cfg}); code != http.StatusOK {
+		t.Fatalf("valid VAT code: %d %v", code, out)
+	}
+	cfg["receipt_vat_code"] = "13"
+	code, out = e.call(http.MethodPost, "/v1/check", map[string]any{"settings": cfg})
 	wantError(t, code, out, http.StatusUnprocessableEntity, adapter.CodeBadSettings)
 }
 
@@ -331,5 +339,23 @@ func TestProviderErrors(t *testing.T) {
 	wantError(t, code, out, http.StatusBadGateway, adapter.CodeProviderUnavailable)
 	if strings.Contains(out["message"].(string), "127.0.0.1") {
 		t.Fatalf("the transport error leaked: %v", out)
+	}
+}
+
+func TestCreateInvoiceWithReceipt(t *testing.T) {
+	e := newEnv(t)
+	cfg := settings()
+	cfg["receipt_vat_code"] = "6"
+	code, out := e.call(http.MethodPost, "/v1/invoices", map[string]any{"settings": cfg, "payment_id": 4217,
+		"idempotency_key": "mikan-4217", "amount": 19900, "currency": "RUB", "description": "VPN",
+		"return_url": "https://panel.example.com/shop", "receipt_email": "buyer@example.com"})
+	if code != http.StatusOK || len(e.yk.created) != 1 {
+		t.Fatalf("invoice: %d %v", code, out)
+	}
+	receipt, _ := json.Marshal(e.yk.created[0]["receipt"])
+	for _, part := range []string{`"email":"buyer@example.com"`, `"value":"199.00"`, `"vat_code":6`, `"payment_subject":"service"`} {
+		if !strings.Contains(string(receipt), part) {
+			t.Fatalf("receipt lacks %s: %s", part, receipt)
+		}
 	}
 }

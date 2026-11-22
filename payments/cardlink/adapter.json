@@ -3,7 +3,7 @@
   "category": "payments",
   "name": {"ru": "Cardlink", "en": "Cardlink"},
   "description": {"ru": "Карты и СБП через Cardlink", "en": "Bank cards and SBP through Cardlink"},
-  "version": "1.0.0",
+  "version": "1.0.1",
   "protocol": 1,
   "image": "ghcr.io/getmikan/adapter-cardlink",
   "min_panel": "0.4.3",
